@@ -1,4 +1,4 @@
 #pragma once
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/frame.hpp"
+#include "coderoast/ipc/channel.hpp" // IWYU pragma: keep
+#include "coderoast/ipc/frame.hpp"   // IWYU pragma: keep

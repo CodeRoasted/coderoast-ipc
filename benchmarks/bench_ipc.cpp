@@ -1,3 +1,5 @@
+// NOLINTBEGIN : Benchmarks are not production code and may intentionally violate some style rules
+// for clarity or simplicity.
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -52,3 +54,5 @@ BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
 } // namespace
 
 BENCHMARK_MAIN();
+// NOLINTEND : Benchmarks are not production code and may intentionally violate some style rules for
+// clarity or simplicity.

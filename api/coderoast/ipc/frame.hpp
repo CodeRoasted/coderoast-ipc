@@ -11,7 +11,9 @@ namespace coderoast::ipc
 inline constexpr std::uint32_t kIpcAbiVersion{1U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
-enum class FrameFormat : std::uint16_t
+// uint16_t is intentional: stable IPC ABI (paired with `flags` to
+// keep the header at 4-byte alignment) and headroom past 256 formats.
+enum class FrameFormat : std::uint16_t // NOLINT(performance-enum-size)
 {
     Unknown = 0,
     Json = 1,
@@ -36,7 +38,9 @@ enum class FrameFormat : std::uint16_t
     OtelJson = 20,
 };
 
-enum LineFrameFlags : std::uint16_t
+// uint16_t is intentional: stable IPC ABI (paired with `flags` to
+// keep the header at 4-byte alignment) and headroom past 256 formats.
+enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
 {
     kLineFrameFlagNone = 0,
     kLineFrameFlagTruncated = 1U << 0U,
@@ -55,7 +59,7 @@ struct LineFrameHeader
     std::uint32_t agent_id{0};
     std::uint32_t shard_id{0};
     FrameFormat format{FrameFormat::Unknown};
-    std::uint16_t flags{kLineFrameFlagNone};
+    LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};
     std::uint32_t reserved{0};
 };
 

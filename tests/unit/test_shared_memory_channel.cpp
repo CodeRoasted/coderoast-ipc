@@ -1,4 +1,4 @@
-#include <cstddef>
+// NOLINTBEGIN : Unit tests may intentionally violate some style rules for clarity or simplicity.
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -94,3 +94,4 @@ TEST(SharedMemorySpscChannel, OverwriteOldestKeepsLatestFrame)
 
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
+// NOLINTEND : Unit tests may intentionally violate some style rules for clarity or simplicity.
