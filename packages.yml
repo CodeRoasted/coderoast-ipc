@@ -1,0 +1,7 @@
+packages:
+  coderoast_ipc:
+    path: .
+    version: 0.1.0
+    public: true
+    release: true
+    depends: []
