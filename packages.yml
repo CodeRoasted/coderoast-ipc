@@ -1,7 +1,7 @@
 packages:
   coderoast_ipc:
     path: .
-    version: 1.2.5
+    version: 1.2.6
     public: true
     release: true
     depends: []
