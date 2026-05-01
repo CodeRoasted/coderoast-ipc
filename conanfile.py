@@ -4,7 +4,7 @@ from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
 
 class CodeRoastIpcConan(ConanFile):
     name = "coderoast_ipc"
-    version = "1.2.3"
+    version = "1.2.4"
     package_type = "header-library"
     license = "Apache-2.0"
     description = "Mostly-header shared-memory IPC primitives for CodeRoast local pipelines."
