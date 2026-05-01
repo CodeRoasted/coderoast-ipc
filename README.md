@@ -28,8 +28,7 @@ CONAN_HOME=/opt/coderoast/conan-stable conan create . \
   --build=missing
 ```
 
-Run this after bumping the version or changing the ABI. The `malf build` alias used by sibling repos
-picks up the new version automatically on the next run (it bootstraps missing packages from the stable cache).
+Run this after bumping the version or changing the ABI.
 
 For local CMake iteration:
 
