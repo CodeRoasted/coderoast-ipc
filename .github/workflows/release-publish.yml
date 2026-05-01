@@ -58,7 +58,7 @@ jobs:
 
       - name: Verify recipe version matches tag
         run: |
-          version="$(python3 -c 'import ast, pathlib; tree = ast.parse(pathlib.Path("conanfile.py").read_text()); print(next(node.value.value for node in tree.body if isinstance(node, ast.Assign) and any(getattr(target, "id", "") == "version" for target in node.targets)))')"
+          version="$(python3 -c 'import ast, pathlib; tree = ast.parse(pathlib.Path("conanfile.py").read_text()); all_nodes = list(tree.body) + [n for cls in tree.body if isinstance(cls, ast.ClassDef) for n in cls.body]; print(next(n.value.value for n in all_nodes if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "version" for t in n.targets)))')"
           if [[ "$version" != "${{ steps.tag.outputs.version }}" ]]; then
             echo "::error::conanfile.py version='$version' != tag '${{ steps.tag.outputs.tag }}'"
             exit 1
