@@ -1,0 +1,42 @@
+# Build outputs
+/build*/
+*.a
+*.o
+*.so
+*.so.*
+
+# CMake / Ninja generated files
+compile_commands.json
+lint_output.txt
+.lint_cache
+
+# test_package — Conan regenerates these on every `conan create`
+test_package/build/
+test_package/CMakeUserPresets.json
+test_package/conanbuild.sh
+test_package/conanrun.sh
+test_package/conanbuildenv-*.sh
+test_package/conanrunenv-*.sh
+test_package/deactivate_conanbuild.sh
+test_package/deactivate_conanrun.sh
+test_package/deactivate_conanbuildenv-*.sh
+test_package/deactivate_conanrunenv-*.sh
+test_package/metadata/
+
+# Conan local cache (only profiles/ and global.conf are tracked)
+.conan2/**
+!.conan2/profiles/
+!.conan2/profiles/**
+!.conan2/global.conf
+
+# Bench results (only baseline.json is tracked)
+bench_results/**
+!bench_results/baseline.json
+
+# Editor
+/.vscode/
+*~
+*.swp
+.DS_Store
+.directory
+**/.qmlls.ini
