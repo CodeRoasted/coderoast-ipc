@@ -1,0 +1,85 @@
+{
+  "context": {
+    "date": "2026-05-03T12:40:57+02:00",
+    "host_name": "DESKTOP-F7PPTO6",
+    "executable": "/home/windows/workspace/coderoast/coderoast-ipc/build/coderoast_ipc_bench",
+    "num_cpus": 8,
+    "mhz_per_cpu": 4192,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 100663296,
+        "num_sharing": 8
+      }
+    ],
+    "load_avg": [0.22998,0.335449,0.258301],
+    "library_build_type": "release"
+  },
+  "benchmarks": [
+    {
+      "name": "BM_SharedMemoryPushPop/1024",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "BM_SharedMemoryPushPop/1024",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 18689206,
+      "real_time": 4.0285884911234788e+01,
+      "cpu_time": 3.7186552922580020e+01,
+      "time_unit": "ns",
+      "slots": 1.0240000000000000e+03
+    },
+    {
+      "name": "BM_SharedMemoryPushPop/8192",
+      "family_index": 0,
+      "per_family_instance_index": 1,
+      "run_name": "BM_SharedMemoryPushPop/8192",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 18440163,
+      "real_time": 4.1172316372655885e+01,
+      "cpu_time": 3.8001667176152402e+01,
+      "time_unit": "ns",
+      "slots": 8.1920000000000000e+03
+    },
+    {
+      "name": "BM_SharedMemoryPushPop/65536",
+      "family_index": 0,
+      "per_family_instance_index": 2,
+      "run_name": "BM_SharedMemoryPushPop/65536",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 18371847,
+      "real_time": 4.1387560597511296e+01,
+      "cpu_time": 3.8201917967202746e+01,
+      "time_unit": "ns",
+      "slots": 6.5536000000000000e+04
+    }
+  ]
+}
