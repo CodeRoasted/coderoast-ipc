@@ -7,12 +7,12 @@ on:
     paths:
       - '.github/workflows/**'
       - '.conan2/**'
+      - 'conanfile.py'
+      - 'core/**'
+      - 'consumer/**'
+      - 'producer/**'
       - 'CMakeLists.txt'
       - 'CMakeUserPresets.json'
-      - 'conanfile.py'
-      - 'api/**'
-      - 'benchmarks/**'
-      - 'tests/**'
       - 'packages.yml'
 
 permissions:
@@ -41,9 +41,32 @@ jobs:
           cache_packages: true
           profile_detect: false
 
-      - name: Build and test package
+      - name: Build root meta-package
         run: |
           conan create . \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing
+
+      - name: Build and test core package
+        run: |
+          conan create core \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+
+      - name: Build and test consumer package
+        run: |
+          conan create consumer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+
+      - name: Build and test producer package
+        run: |
+          conan create producer \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --build=missing \
