@@ -1,0 +1,55 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "conan-debug",
+            "displayName": "debug",
+            "description": "coderoast_ipc_core debug configuration",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "toolchainFile": "${sourceDir}/build/conan_toolchain.cmake",
+            "binaryDir": "${sourceDir}/build"
+        },
+        {
+            "name": "conan-release",
+            "displayName": "release",
+            "description": "coderoast_ipc_core release configuration",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "toolchainFile": "${sourceDir}/build/conan_toolchain.cmake",
+            "binaryDir": "${sourceDir}/build"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "conan-debug",
+            "configurePreset": "conan-debug"
+        },
+        {
+            "name": "conan-release",
+            "configurePreset": "conan-release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "conan-debug",
+            "configurePreset": "conan-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "conan-release",
+            "configurePreset": "conan-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

@@ -7,12 +7,12 @@ on:
     paths:
       - '.github/workflows/**'
       - '.conan2/**'
+      - 'conanfile.py'
+      - 'core/**'
+      - 'consumer/**'
+      - 'producer/**'
       - 'CMakeLists.txt'
       - 'CMakeUserPresets.json'
-      - 'conanfile.py'
-      - 'api/**'
-      - 'benchmarks/**'
-      - 'tests/**'
       - 'packages.yml'
 
 permissions:
@@ -41,10 +41,63 @@ jobs:
           cache_packages: true
           profile_detect: false
 
-      - name: Build and test package
+      - name: Build root meta-package
         run: |
           conan create . \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing
+
+      - name: Build and test core package
+        run: |
+          conan create core \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing
+          
+          # Build and run tests from source with Conan dependencies
+          conan install core \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --build=missing \
-            --build-test=missing
+            -of core/build_test
+          cmake --preset conan-release -S core -B core/build_test \
+            -DCODEROAST_IPC_CORE_BUILD_TESTS=ON -DCODEROAST_IPC_CORE_BUILD_BENCH=ON
+          cmake --build core/build_test
+          ctest --test-dir core/build_test --output-on-failure
+
+      - name: Build and test consumer package
+        run: |
+          conan create consumer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing
+          
+          # Build and run tests from source with Conan dependencies
+          conan install consumer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            -of consumer/build_test
+          cmake --preset conan-release -S consumer -B consumer/build_test \
+            -DCODEROAST_IPC_CONSUMER_BUILD_TESTS=ON
+          cmake --build consumer/build_test
+          ctest --test-dir consumer/build_test --output-on-failure
+
+      - name: Build and test producer package
+        run: |
+          conan create producer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing
+          
+          # Build and run tests from source with Conan dependencies
+          conan install producer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            -of producer/build_test
+          cmake --preset conan-release -S producer -B producer/build_test \
+            -DCODEROAST_IPC_PRODUCER_BUILD_TESTS=ON
+          cmake --build producer/build_test
+          ctest --test-dir producer/build_test --output-on-failure
