@@ -44,13 +44,14 @@ TEST(SharedMemorySource, PopsFramesAsSingleShardSource)
     auto producer{
         Channel::create(coderoast::ipc::ChannelConfig{.name = shard_name, .slot_count = 8})};
 
-    coderoast::ipc::consumer::SharedMemorySource<> source{coderoast::ipc::consumer::SharedMemorySource<>::Config{
-        .channel = base_name,
-        .shard_count = 1,
-    }};
+    coderoast::ipc::consumer::SharedMemorySource<> source{
+        coderoast::ipc::consumer::SharedMemorySource<>::Config{
+            .channel = base_name,
+            .shard_count = 1,
+        }};
 
-    producer.push(make_frame(1, 0, "hello"));
-    producer.push(make_frame(2, 0, "world"));
+    (void)producer.push(make_frame(1, 0, "hello"));
+    (void)producer.push(make_frame(2, 0, "world"));
 
     std::string_view payload;
     ASSERT_TRUE(source.try_pop(payload));
@@ -77,8 +78,8 @@ TEST(OrderedLineFrameIterator, ConsumesOrderedFrames)
             .first_sequence = 1,
         }};
 
-    producer.push(make_frame(1, 0, "first"));
-    producer.push(make_frame(2, 0, "second"));
+    (void)producer.push(make_frame(1, 0, "first"));
+    (void)producer.push(make_frame(2, 0, "second"));
 
     Frame out{};
     ASSERT_TRUE(iterator.try_next(out));
