@@ -1,5 +1,4 @@
 name: Release publish
-
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -64,27 +63,45 @@ jobs:
             exit 1
           fi
 
-      - name: Build package
+      - name: Build packages
         run: |
-          conan create . \
+          # Create each sub-package to ensure they're in cache
+          conan create core \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+          
+          conan create consumer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+          
+          conan create producer \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --build=missing \
             --build-test=missing
 
-      - name: Export Conan tarball (all packages)
+      - name: Export Conan packages as individual tarballs
         run: |
           mkdir -p release-assets
-          # Save all coderoast_ipc* packages (meta-package + core, consumer, producer)
-          conan cache save "coderoast_ipc*/${{ steps.tag.outputs.version }}:*" \
-            --file="release-assets/coderoast_ipc-${{ steps.tag.outputs.version }}.tgz"
+          
+          # Save each sub-package individually so consumers download only what they need
+          conan cache save "coderoast_ipc_core/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_core-${{ steps.tag.outputs.version }}.tgz"
+          conan cache save "coderoast_ipc_consumer/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_consumer-${{ steps.tag.outputs.version }}.tgz"
+          conan cache save "coderoast_ipc_producer/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_producer-${{ steps.tag.outputs.version }}.tgz"
 
-      - name: Attach tarball to GitHub Release
+      - name: Attach tarballs to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "Automated CodeRoast IPC Conan packages release for $TAG (includes coderoast_ipc_core, coderoast_ipc_consumer, coderoast_ipc_producer)."
+            gh release create "$TAG" --title "$TAG"
           fi
           gh release upload "$TAG" release-assets/*.tgz --clobber
