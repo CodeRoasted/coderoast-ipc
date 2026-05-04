@@ -1,0 +1,126 @@
+#pragma once
+
+// insight/ingest/shared_memory_source.hpp
+//
+// SharedMemorySource — consumer-side adapter over OrderedLineFrameIterator.
+//
+// Presents incoming IPC frames as a zero-copy string_view stream suitable
+// for feeding directly into InsightPipeline::ingest_line() or any other
+// raw-line consumer.
+//
+// Usage:
+//
+//   SharedMemorySource<> source{SharedMemorySource<>::Config{
+//       .channel     = "coderoast.myapp",
+//       .shard_count = 4,
+//   }};
+//
+//   std::string_view payload;
+//   while (source.try_pop(payload)) {
+//       pipeline.ingest_line(payload);   // payload valid until next try_pop()
+//   }
+//
+// Ownership & validity:
+//   The string_view returned via out_payload is a non-owning view into an
+//   internal frame buffer.  It is valid only until the next call to
+//   try_pop().  Callers that need to retain the data must copy it.
+//
+// Thread safety:
+//   Not thread-safe.  Use one instance per thread or serialise externally.
+
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+#include <utility>
+
+#include "coderoast/ipc/channel.hpp"
+#include "coderoast/ipc/frame.hpp"
+#include "insight/ingest/ordered_line_frame_iterator.hpp"
+
+namespace insight::ingest
+{
+
+template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemorySource
+{
+  public:
+    struct Config
+    {
+        std::string channel{"coderoast.default"};
+        std::size_t shard_count{1};
+        std::uint64_t first_sequence{1};
+        SequenceGapPolicy gap_policy{SequenceGapPolicy::WaitForMissing};
+        coderoast::ipc::BackpressurePolicy backpressure{
+            coderoast::ipc::BackpressurePolicy::DropNewest};
+        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+    };
+
+    SharedMemorySource() = default;
+
+    explicit SharedMemorySource(Config config)
+        : iterator_{typename OrderedLineFrameIterator<Frame>::Config{
+              .channel = std::move(config.channel),
+              .shard_count = config.shard_count,
+              .first_sequence = config.first_sequence,
+              .gap_policy = config.gap_policy,
+              .backpressure = config.backpressure,
+              .wait_strategy = config.wait_strategy,
+          }}
+    {
+    }
+
+    SharedMemorySource(const SharedMemorySource&) = delete;
+    SharedMemorySource& operator=(const SharedMemorySource&) = delete;
+    SharedMemorySource(SharedMemorySource&&) noexcept = default;
+    SharedMemorySource& operator=(SharedMemorySource&&) noexcept = default;
+    ~SharedMemorySource() = default;
+
+    // Attempt to consume the next ordered frame.
+    //
+    // Returns true and populates out_payload with a view into the frame's
+    // payload bytes.  The view is valid until the next call to try_pop().
+    //
+    // Returns false when no in-order frame is currently available (either
+    // all channels are empty, or a gap is being waited on under the
+    // WaitForMissing policy).
+    [[nodiscard]] bool try_pop(std::string_view& out_payload)
+    {
+        if (!iterator_.try_next(current_frame_))
+        {
+            return false;
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        out_payload = std::string_view{reinterpret_cast<const char*>(current_frame_.payload.data()),
+                                       current_frame_.header.payload_size};
+        return true;
+    }
+
+    // Shard id carried in the frame header of the most recently popped frame.
+    // Valid only immediately after a successful try_pop() call.
+    [[nodiscard]] std::uint32_t current_shard_id() const noexcept
+    {
+        return current_frame_.header.shard_id;
+    }
+
+    // Number of globally-sequenced frames skipped due to SkipMissing policy.
+    [[nodiscard]] std::uint64_t skipped_sequences() const noexcept
+    {
+        return iterator_.skipped_sequences();
+    }
+
+    // Number of shards this source is consuming.
+    [[nodiscard]] std::size_t shard_count() const noexcept
+    {
+        return iterator_.shard_count();
+    }
+
+    void close() noexcept
+    {
+        iterator_.close();
+    }
+
+  private:
+    OrderedLineFrameIterator<Frame> iterator_{};
+    Frame current_frame_{};
+};
+
+} // namespace insight::ingest
