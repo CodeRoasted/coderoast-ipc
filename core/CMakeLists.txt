@@ -7,10 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CODEROAST_IPC_CORE_BUILD_TESTS "Build coderoast_ipc_core unit tests" ${PROJECT_IS_TOP_LEVEL})
-option(CODEROAST_IPC_CORE_BUILD_BENCHMARKS "Build coderoast_ipc_core microbenchmarks" ${PROJECT_IS_TOP_LEVEL})
 
+###########################################################
+#  Sources
+###########################################################
 file(GLOB_RECURSE API_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/api/*.hpp")
 
+###########################################################
+#  Header-only library target
+###########################################################
 add_library(coderoast_ipc_core INTERFACE ${API_HEADERS})
 set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME ipc_core)
 add_library(coderoast::ipc::core ALIAS coderoast_ipc_core)
@@ -21,6 +26,9 @@ target_include_directories(coderoast_ipc_core
         $<INSTALL_INTERFACE:include>
 )
 
+###########################################################
+#  Install rules (used by `conan create`)
+###########################################################
 include(GNUInstallDirs)
 install(TARGETS coderoast_ipc_core
     EXPORT coderoast_ipc_coreTargets
@@ -32,36 +40,63 @@ install(EXPORT coderoast_ipc_coreTargets
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core
 )
 
+###########################################################
+#  Tests (only when building the root project)
+###########################################################
+if(CODEROAST_IPC_CORE_BUILD_TESTS)
+    file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*.cpp"
+    )
+###########################################################
+#  Tests (only when building the root project)
+###########################################################
 if(CODEROAST_IPC_CORE_BUILD_TESTS)
     file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*.cpp"
     )
     if(TEST_SOURCES)
         include(CTest)
-        find_package(GTest REQUIRED CONFIG)
         enable_testing()
-
-        add_executable(coderoast_ipc_core_tests ${TEST_SOURCES})
-        target_link_libraries(coderoast_ipc_core_tests PRIVATE
-            coderoast_ipc_core
-            GTest::gtest
-            GTest::gtest_main
-        )
-        include(GoogleTest)
-        gtest_discover_tests(coderoast_ipc_core_tests)
+        
+        # Try to load gtest paths from conanfile.py injection
+        if(EXISTS "${CMAKE_BINARY_DIR}/gtest_paths.cmake")
+            include("${CMAKE_BINARY_DIR}/gtest_paths.cmake")
+        endif()
+        
+        # If paths still not set, search in Conan cache
+        if(NOT GTEST_INCLUDE_DIR)
+            file(GLOB_RECURSE GTEST_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/gtest/gtest.h")
+            if(GTEST_HEADER)
+                list(GET GTEST_HEADER 0 GTEST_HEADER_PATH)
+                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_HEADER_PATH}" DIRECTORY)
+                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_INCLUDE_DIR}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(NOT GTEST_LIB_DIR)
+            file(GLOB_RECURSE GTEST_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libgtest.a")
+            if(GTEST_LIB)
+                list(GET GTEST_LIB 0 GTEST_LIB_PATH)
+                get_filename_component(GTEST_LIB_DIR "${GTEST_LIB_PATH}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
+            message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
+            
+            add_executable(coderoast_ipc_core_tests ${TEST_SOURCES})
+            target_include_directories(coderoast_ipc_core_tests PRIVATE "${GTEST_INCLUDE_DIR}")
+            target_link_libraries(coderoast_ipc_core_tests PRIVATE
+                coderoast_ipc_core
+                "${GTEST_LIB_DIR}/libgtest.a"
+                pthread
+            )
+            
+            # Register tests
+            add_test(NAME coderoast_ipc_core_tests COMMAND coderoast_ipc_core_tests)
+        else()
+            message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
+        endif()
     endif()
 endif()
-
-if(CODEROAST_IPC_CORE_BUILD_BENCHMARKS)
-    file(GLOB_RECURSE BENCH_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/*.cpp"
-    )
-    if(BENCH_SOURCES)
-        find_package(benchmark REQUIRED CONFIG)
-        add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
-        target_link_libraries(coderoast_ipc_core_bench PRIVATE
-            coderoast_ipc_core
-            benchmark::benchmark
-        )
-    endif()
 endif()

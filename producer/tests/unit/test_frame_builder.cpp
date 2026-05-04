@@ -57,3 +57,9 @@ TEST(StableAgentId, DifferentNamesProduceDifferentHashes)
     EXPECT_NE(id1, id2);
 }
 // NOLINTEND : Unit tests may intentionally violate some style rules for clarity
+
+int main(int argc, char** argv)
+{
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

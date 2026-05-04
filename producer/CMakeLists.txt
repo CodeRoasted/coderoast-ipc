@@ -45,16 +45,51 @@ if(CODEROAST_IPC_PRODUCER_BUILD_TESTS)
     )
     if(TEST_SOURCES)
         include(CTest)
-        find_package(GTest REQUIRED CONFIG)
         enable_testing()
-
-        add_executable(coderoast_ipc_producer_tests ${TEST_SOURCES})
-        target_link_libraries(coderoast_ipc_producer_tests PRIVATE
-            coderoast_ipc_producer
-            GTest::gtest
-            GTest::gtest_main
-        )
-        include(GoogleTest)
-        gtest_discover_tests(coderoast_ipc_producer_tests)
+        
+        # Try to load gtest paths from conanfile.py injection
+        if(EXISTS "${CMAKE_BINARY_DIR}/gtest_paths.cmake")
+            include("${CMAKE_BINARY_DIR}/gtest_paths.cmake")
+        endif()
+        
+        # If paths still not set, search in Conan cache
+        if(NOT GTEST_INCLUDE_DIR)
+            file(GLOB_RECURSE GTEST_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/gtest/gtest.h")
+            if(GTEST_HEADER)
+                list(GET GTEST_HEADER 0 GTEST_HEADER_PATH)
+                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_HEADER_PATH}" DIRECTORY)
+                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_INCLUDE_DIR}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(NOT GTEST_LIB_DIR)
+            file(GLOB_RECURSE GTEST_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libgtest.a")
+            if(GTEST_LIB)
+                list(GET GTEST_LIB 0 GTEST_LIB_PATH)
+                get_filename_component(GTEST_LIB_DIR "${GTEST_LIB_PATH}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
+            message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
+            
+            add_executable(coderoast_ipc_producer_tests ${TEST_SOURCES})
+            target_link_libraries(coderoast_ipc_producer_tests PRIVATE
+                coderoast_ipc_producer
+                coderoast::ipc::core
+                "${GTEST_LIB_DIR}/libgtest.a"
+                pthread
+            )
+            # Ensure core headers are in include path (source tree + installed package)
+            target_include_directories(coderoast_ipc_producer_tests PRIVATE
+                "${GTEST_INCLUDE_DIR}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../core/api"
+            )
+            
+            # Register tests
+            add_test(NAME coderoast_ipc_producer_tests COMMAND coderoast_ipc_producer_tests)
+        else()
+            message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
+        endif()
     endif()
 endif()
