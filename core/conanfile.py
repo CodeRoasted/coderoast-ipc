@@ -1,7 +1,6 @@
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeToolchain
+from conan.tools.cmake import CMakeToolchain
 from conan.tools.files import copy, save
-import json
 import os
 
 
@@ -13,10 +12,11 @@ class CodeRoastIpcCoreConan(ConanFile):
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
     settings = "os", "arch", "compiler", "build_type"
 
-    exports_sources = "CMakeLists.txt", "api/*", "tests/*"
+    exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
 
     def build_requirements(self):
         self.test_requires("gtest/1.17.0")
+        self.test_requires("benchmark/1.8.3")
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -31,12 +31,23 @@ class CodeRoastIpcCoreConan(ConanFile):
                 gtest_libs = gtest_dep.cpp_info.libdirs[0] if gtest_dep.cpp_info.libdirs else None
                 
                 if gtest_include and gtest_libs:
-                    # Create a CMake script to pass these paths
                     paths_content = f'''
-set(GTEST_INCLUDE_DIR "{gtest_include}")
-set(GTEST_LIB_DIR "{gtest_libs}")
-'''
+                        set(GTEST_INCLUDE_DIR "{gtest_include}")
+                        set(GTEST_LIB_DIR "{gtest_libs}")
+                        '''
                     save(self, os.path.join(self.generators_folder, "gtest_paths.cmake"), paths_content)
+
+            benchmark_dep = self.dependencies.get("benchmark", None)
+            if benchmark_dep:
+                benchmark_include = benchmark_dep.cpp_info.includedirs[0]
+                benchmark_libs = benchmark_dep.cpp_info.libdirs[0] if benchmark_dep.cpp_info.libdirs else None
+                
+                if benchmark_include and benchmark_libs:
+                    paths_content = f'''
+                        set(BENCHMARK_INCLUDE_DIR "{benchmark_include}")
+                        set(BENCHMARK_LIB_DIR "{benchmark_libs}")
+                        '''
+                    save(self, os.path.join(self.generators_folder, "benchmark_paths.cmake"), paths_content)
 
     def build(self):
         # Header-only library - nothing to build

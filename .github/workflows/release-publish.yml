@@ -72,10 +72,11 @@ jobs:
             --build=missing \
             --build-test=missing
 
-      - name: Export Conan tarball
+      - name: Export Conan tarball (all packages)
         run: |
           mkdir -p release-assets
-          conan cache save "coderoast_ipc/${{ steps.tag.outputs.version }}:*" \
+          # Save all coderoast_ipc* packages (meta-package + core, consumer, producer)
+          conan cache save "coderoast_ipc*/${{ steps.tag.outputs.version }}:*" \
             --file="release-assets/coderoast_ipc-${{ steps.tag.outputs.version }}.tgz"
 
       - name: Attach tarball to GitHub Release
@@ -84,6 +85,6 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "Automated coderoast_ipc Conan-package release for $TAG."
+            gh release create "$TAG" --title "$TAG" --notes "Automated CodeRoast IPC Conan packages release for $TAG (includes coderoast_ipc_core, coderoast_ipc_consumer, coderoast_ipc_producer)."
           fi
           gh release upload "$TAG" release-assets/*.tgz --clobber

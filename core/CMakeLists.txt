@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CODEROAST_IPC_CORE_BUILD_TESTS "Build coderoast_ipc_core unit tests" ${PROJECT_IS_TOP_LEVEL})
+option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${PROJECT_IS_TOP_LEVEL})
 
 ###########################################################
 #  Sources
@@ -40,13 +41,6 @@ install(EXPORT coderoast_ipc_coreTargets
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core
 )
 
-###########################################################
-#  Tests (only when building the root project)
-###########################################################
-if(CODEROAST_IPC_CORE_BUILD_TESTS)
-    file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*.cpp"
-    )
 ###########################################################
 #  Tests (only when building the root project)
 ###########################################################
@@ -99,4 +93,50 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
         endif()
     endif()
 endif()
+
+###########################################################
+#  Benchmarks (only when building the root project)
+###########################################################
+if(CODEROAST_IPC_CORE_BUILD_BENCH)
+    file(GLOB_RECURSE BENCH_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/*.cpp"
+    )
+    if(BENCH_SOURCES)
+        # Try to load benchmark paths from conanfile.py injection
+        if(EXISTS "${CMAKE_BINARY_DIR}/benchmark_paths.cmake")
+            include("${CMAKE_BINARY_DIR}/benchmark_paths.cmake")
+        endif()
+        
+        # If paths still not set, search in Conan cache
+        if(NOT BENCHMARK_INCLUDE_DIR)
+            file(GLOB_RECURSE BENCHMARK_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/benchmark/benchmark.h")
+            if(BENCHMARK_HEADER)
+                list(GET BENCHMARK_HEADER 0 BENCHMARK_HEADER_PATH)
+                get_filename_component(BENCHMARK_INCLUDE_DIR "${BENCHMARK_HEADER_PATH}" DIRECTORY)
+                get_filename_component(BENCHMARK_INCLUDE_DIR "${BENCHMARK_INCLUDE_DIR}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(NOT BENCHMARK_LIB_DIR)
+            file(GLOB_RECURSE BENCHMARK_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libbenchmark.a")
+            if(BENCHMARK_LIB)
+                list(GET BENCHMARK_LIB 0 BENCHMARK_LIB_PATH)
+                get_filename_component(BENCHMARK_LIB_DIR "${BENCHMARK_LIB_PATH}" DIRECTORY)
+            endif()
+        endif()
+        
+        if(BENCHMARK_INCLUDE_DIR AND BENCHMARK_LIB_DIR)
+            message(STATUS "Found benchmark: INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
+            
+            add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
+            target_include_directories(coderoast_ipc_core_bench PRIVATE "${BENCHMARK_INCLUDE_DIR}")
+            target_link_libraries(coderoast_ipc_core_bench PRIVATE
+                coderoast_ipc_core
+                "${BENCHMARK_LIB_DIR}/libbenchmark.a"
+                pthread
+            )
+        else()
+            message(WARNING "Could not find benchmark. INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
+        endif()
+    endif()
 endif()

@@ -30,8 +30,8 @@ test_package/metadata/
 !.conan2/global.conf
 
 # Bench results (only baseline.json is tracked)
-bench_results/**
-!bench_results/baseline.json
+core/bench_results/**
+!core/bench_results/baseline.json
 
 # Editor
 /.vscode/

@@ -1,12 +1,11 @@
 #pragma once
 
-// insight/ingest/shared_memory_source.hpp
+// coderoast/ipc/consumer/shared_memory_source.hpp
 //
 // SharedMemorySource — consumer-side adapter over OrderedLineFrameIterator.
 //
 // Presents incoming IPC frames as a zero-copy string_view stream suitable
-// for feeding directly into InsightPipeline::ingest_line() or any other
-// raw-line consumer.
+// for feeding to any raw-line consumer or sink.
 //
 // Usage:
 //
@@ -34,10 +33,10 @@
 #include <utility>
 
 #include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/frame.hpp"
 #include "coderoast/ipc/consumer/ordered_line_frame_iterator.hpp"
+#include "coderoast/ipc/frame.hpp"
 
-namespace insight::ingest
+namespace coderoast::ipc::consumer
 {
 
 template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemorySource
@@ -123,4 +122,4 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
     Frame current_frame_{};
 };
 
-} // namespace insight::ingest
+} // namespace coderoast::ipc::consumer

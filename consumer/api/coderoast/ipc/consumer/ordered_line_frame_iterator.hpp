@@ -13,7 +13,7 @@
 #include "coderoast/ipc/channel.hpp"
 #include "coderoast/ipc/frame.hpp"
 
-namespace insight::ingest
+namespace coderoast::ipc::consumer
 {
 
 enum class SequenceGapPolicy : std::uint8_t
@@ -213,4 +213,4 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
     std::uint64_t skipped_sequences_{0};
 };
 
-} // namespace insight::ingest
+} // namespace coderoast::ipc::consumer

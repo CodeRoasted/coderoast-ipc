@@ -19,8 +19,7 @@ using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
     return std::string{"coderoast_consumer_test_"} + suffix + "_" + std::to_string(::getpid());
 }
 
-[[nodiscard]] Frame make_frame(std::uint64_t sequence, std::uint32_t shard_id,
-                               const char* payload)
+[[nodiscard]] Frame make_frame(std::uint64_t sequence, std::uint32_t shard_id, const char* payload)
 {
     Frame frame{};
     frame.header.sequence = sequence;
@@ -45,7 +44,7 @@ TEST(SharedMemorySource, PopsFramesAsSingleShardSource)
     auto producer{
         Channel::create(coderoast::ipc::ChannelConfig{.name = shard_name, .slot_count = 8})};
 
-    insight::ingest::SharedMemorySource<> source{insight::ingest::SharedMemorySource<>::Config{
+    coderoast::ipc::consumer::SharedMemorySource<> source{coderoast::ipc::consumer::SharedMemorySource<>::Config{
         .channel = base_name,
         .shard_count = 1,
     }};
@@ -71,8 +70,8 @@ TEST(OrderedLineFrameIterator, ConsumesOrderedFrames)
     auto producer{
         Channel::create(coderoast::ipc::ChannelConfig{.name = shard_name, .slot_count = 8})};
 
-    insight::ingest::OrderedLineFrameIterator<> iterator{
-        typename insight::ingest::OrderedLineFrameIterator<>::Config{
+    coderoast::ipc::consumer::OrderedLineFrameIterator<> iterator{
+        typename coderoast::ipc::consumer::OrderedLineFrameIterator<>::Config{
             .channel = base_name,
             .shard_count = 1,
             .first_sequence = 1,
@@ -90,10 +89,10 @@ TEST(OrderedLineFrameIterator, ConsumesOrderedFrames)
 
     Channel::unlink(shard_name);
 }
-// NOLINTEND : Unit tests may intentionally violate some style rules for clarity
 
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+// NOLINTEND : Unit tests may intentionally violate some style rules for clarity
