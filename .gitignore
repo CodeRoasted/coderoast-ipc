@@ -23,6 +23,37 @@ test_package/deactivate_conanbuildenv-*.sh
 test_package/deactivate_conanrunenv-*.sh
 test_package/metadata/
 
+# Conan-generated files in source directories (regenerated on each install/create)
+core/conanbuild.sh
+core/conanrun.sh
+core/conanbuildenv-*.sh
+core/conanrunenv-*.sh
+core/deactivate_conanbuild.sh
+core/deactivate_conanrun.sh
+core/CMakePresets.json
+core/conan_toolchain.cmake
+core/*_paths.cmake
+
+consumer/conanbuild.sh
+consumer/conanrun.sh
+consumer/conanbuildenv-*.sh
+consumer/conanrunenv-*.sh
+consumer/deactivate_conanbuild.sh
+consumer/deactivate_conanrun.sh
+consumer/CMakePresets.json
+consumer/conan_toolchain.cmake
+consumer/*_paths.cmake
+
+producer/conanbuild.sh
+producer/conanrun.sh
+producer/conanbuildenv-*.sh
+producer/conanrunenv-*.sh
+producer/deactivate_conanbuild.sh
+producer/deactivate_conanrun.sh
+producer/CMakePresets.json
+producer/conan_toolchain.cmake
+producer/*_paths.cmake
+
 # Conan local cache (only profiles/ and global.conf are tracked)
 .conan2/**
 !.conan2/profiles/
