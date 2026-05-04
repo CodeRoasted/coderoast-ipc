@@ -1,0 +1,28 @@
+{
+  "tests": 2,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "SharedMemorySource",
+      "tests": 1,
+      "testsuite": [
+        {
+          "name": "PopsFramesAsSingleShardSource",
+          "file": "\/home\/windows\/workspace\/coderoast\/coderoast-ipc\/consumer\/tests\/unit\/test_shared_memory_source.cpp",
+          "line": 40
+        }
+      ]
+    },
+    {
+      "name": "OrderedLineFrameIterator",
+      "tests": 1,
+      "testsuite": [
+        {
+          "name": "ConsumesOrderedFrames",
+          "file": "\/home\/windows\/workspace\/coderoast\/coderoast-ipc\/consumer\/tests\/unit\/test_shared_memory_source.cpp",
+          "line": 66
+        }
+      ]
+    }
+  ]
+}

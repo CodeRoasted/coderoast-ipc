@@ -35,7 +35,7 @@
 
 #include "coderoast/ipc/channel.hpp"
 #include "coderoast/ipc/frame.hpp"
-#include "insight/ingest/ordered_line_frame_iterator.hpp"
+#include "coderoast/ipc/consumer/ordered_line_frame_iterator.hpp"
 
 namespace insight::ingest
 {

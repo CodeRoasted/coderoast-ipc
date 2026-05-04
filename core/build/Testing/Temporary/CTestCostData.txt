@@ -1,0 +1,4 @@
+SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder 1 0.00210093
+SharedMemorySpscChannel.DropNewestCountsRejectedFrames 1 0.00214176
+SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame 1 0.0019703
+---

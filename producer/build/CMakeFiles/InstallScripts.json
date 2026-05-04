@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/windows/workspace/coderoast/coderoast-ipc/producer/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

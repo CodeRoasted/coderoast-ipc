@@ -1,0 +1,1 @@
+. "/home/windows/workspace/coderoast/coderoast-ipc/core/build/conanrunenv-debug-x86_64.sh"
