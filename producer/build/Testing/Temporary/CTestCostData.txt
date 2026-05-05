@@ -1,0 +1,6 @@
+FrameBuilder.BuildsFrameWithIncrementingGlobalSequence 1 0.00191101
+FrameBuilder.TracksSeparatePerShardSequences 1 0.00206867
+FrameBuilder.ModulosShardIdAgainstShardCount 1 0.00193706
+StableAgentId.HasConsistentHashForSameName 1 0.00165179
+StableAgentId.DifferentNamesProduceDifferentHashes 1 0.0016097
+---

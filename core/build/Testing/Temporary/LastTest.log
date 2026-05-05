@@ -1,0 +1,84 @@
+Start testing: May 04 07:52 CEST
+----------------------------------------------------------
+1/3 Testing: SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder
+1/3 Test: SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder
+Command: "/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests" "--gtest_filter=SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder" "--gtest_also_run_disabled_tests"
+Directory: /home/windows/workspace/coderoast/coderoast-ipc/core/build
+"SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder" start time: May 04 07:52 CEST
+Output:
+----------------------------------------------------------
+Running main() from /home/windows/workspace/coderoast/coderoast-ipc/.conan2/p/b/gtestdc5ef5ee991d5/b/src/googletest/src/gtest_main.cc
+Note: Google Test filter = SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SharedMemorySpscChannel
+[ RUN      ] SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder
+[       OK ] SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder (0 ms)
+[----------] 1 test from SharedMemorySpscChannel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder" end time: May 04 07:52 CEST
+"SharedMemorySpscChannel.PushesAndPopsLineFramesInOrder" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/3 Testing: SharedMemorySpscChannel.DropNewestCountsRejectedFrames
+2/3 Test: SharedMemorySpscChannel.DropNewestCountsRejectedFrames
+Command: "/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests" "--gtest_filter=SharedMemorySpscChannel.DropNewestCountsRejectedFrames" "--gtest_also_run_disabled_tests"
+Directory: /home/windows/workspace/coderoast/coderoast-ipc/core/build
+"SharedMemorySpscChannel.DropNewestCountsRejectedFrames" start time: May 04 07:52 CEST
+Output:
+----------------------------------------------------------
+Running main() from /home/windows/workspace/coderoast/coderoast-ipc/.conan2/p/b/gtestdc5ef5ee991d5/b/src/googletest/src/gtest_main.cc
+Note: Google Test filter = SharedMemorySpscChannel.DropNewestCountsRejectedFrames
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SharedMemorySpscChannel
+[ RUN      ] SharedMemorySpscChannel.DropNewestCountsRejectedFrames
+[       OK ] SharedMemorySpscChannel.DropNewestCountsRejectedFrames (0 ms)
+[----------] 1 test from SharedMemorySpscChannel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"SharedMemorySpscChannel.DropNewestCountsRejectedFrames" end time: May 04 07:52 CEST
+"SharedMemorySpscChannel.DropNewestCountsRejectedFrames" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/3 Testing: SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame
+3/3 Test: SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame
+Command: "/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests" "--gtest_filter=SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame" "--gtest_also_run_disabled_tests"
+Directory: /home/windows/workspace/coderoast/coderoast-ipc/core/build
+"SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame" start time: May 04 07:52 CEST
+Output:
+----------------------------------------------------------
+Running main() from /home/windows/workspace/coderoast/coderoast-ipc/.conan2/p/b/gtestdc5ef5ee991d5/b/src/googletest/src/gtest_main.cc
+Note: Google Test filter = SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SharedMemorySpscChannel
+[ RUN      ] SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame
+[       OK ] SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame (0 ms)
+[----------] 1 test from SharedMemorySpscChannel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame" end time: May 04 07:52 CEST
+"SharedMemorySpscChannel.OverwriteOldestKeepsLatestFrame" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: May 04 07:52 CEST

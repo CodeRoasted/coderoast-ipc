@@ -1,0 +1,5 @@
+if(EXISTS "/home/windows/workspace/coderoast/coderoast-ipc/producer/build/coderoast_ipc_producer_tests[1]_tests.cmake")
+  include("/home/windows/workspace/coderoast/coderoast-ipc/producer/build/coderoast_ipc_producer_tests[1]_tests.cmake")
+else()
+  add_test(coderoast_ipc_producer_tests_NOT_BUILT coderoast_ipc_producer_tests_NOT_BUILT)
+endif()

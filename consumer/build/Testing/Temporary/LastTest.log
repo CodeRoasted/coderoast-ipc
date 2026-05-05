@@ -1,0 +1,57 @@
+Start testing: May 04 07:54 CEST
+----------------------------------------------------------
+1/2 Testing: SharedMemorySource.PopsFramesAsSingleShardSource
+1/2 Test: SharedMemorySource.PopsFramesAsSingleShardSource
+Command: "/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/coderoast_ipc_consumer_tests" "--gtest_filter=SharedMemorySource.PopsFramesAsSingleShardSource" "--gtest_also_run_disabled_tests"
+Directory: /home/windows/workspace/coderoast/coderoast-ipc/consumer/build
+"SharedMemorySource.PopsFramesAsSingleShardSource" start time: May 04 07:54 CEST
+Output:
+----------------------------------------------------------
+Running main() from /home/windows/workspace/coderoast/coderoast-ipc/.conan2/p/b/gtestdc5ef5ee991d5/b/src/googletest/src/gtest_main.cc
+Note: Google Test filter = SharedMemorySource.PopsFramesAsSingleShardSource
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SharedMemorySource
+[ RUN      ] SharedMemorySource.PopsFramesAsSingleShardSource
+[       OK ] SharedMemorySource.PopsFramesAsSingleShardSource (0 ms)
+[----------] 1 test from SharedMemorySource (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"SharedMemorySource.PopsFramesAsSingleShardSource" end time: May 04 07:54 CEST
+"SharedMemorySource.PopsFramesAsSingleShardSource" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/2 Testing: OrderedLineFrameIterator.ConsumesOrderedFrames
+2/2 Test: OrderedLineFrameIterator.ConsumesOrderedFrames
+Command: "/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/coderoast_ipc_consumer_tests" "--gtest_filter=OrderedLineFrameIterator.ConsumesOrderedFrames" "--gtest_also_run_disabled_tests"
+Directory: /home/windows/workspace/coderoast/coderoast-ipc/consumer/build
+"OrderedLineFrameIterator.ConsumesOrderedFrames" start time: May 04 07:54 CEST
+Output:
+----------------------------------------------------------
+Running main() from /home/windows/workspace/coderoast/coderoast-ipc/.conan2/p/b/gtestdc5ef5ee991d5/b/src/googletest/src/gtest_main.cc
+Note: Google Test filter = OrderedLineFrameIterator.ConsumesOrderedFrames
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from OrderedLineFrameIterator
+[ RUN      ] OrderedLineFrameIterator.ConsumesOrderedFrames
+[       OK ] OrderedLineFrameIterator.ConsumesOrderedFrames (0 ms)
+[----------] 1 test from OrderedLineFrameIterator (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"OrderedLineFrameIterator.ConsumesOrderedFrames" end time: May 04 07:54 CEST
+"OrderedLineFrameIterator.ConsumesOrderedFrames" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: May 04 07:54 CEST

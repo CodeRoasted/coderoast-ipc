@@ -1,0 +1,107 @@
+name: Release publish
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (vMAJOR.MINOR.PATCH)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coderoast-ipc-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CONAN_HOME: ${{ github.workspace }}/.conan2
+      CONAN_PROFILE: linux-gcc13-release
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Setup environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3-pip build-essential
+
+      - name: Setup Conan
+        uses: conan-io/setup-conan@v1
+        with:
+          home: ${{ env.CONAN_HOME }}
+          cache_packages: true
+          profile_detect: false
+
+      - name: Verify recipe version matches tag
+        run: |
+          version="$(sed -nE "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"]/\1/p" conanfile.py | head -n1 || true)"
+          if [[ "$version" != "${{ steps.tag.outputs.version }}" ]]; then
+            echo "::error::conanfile.py version='$version' != tag '${{ steps.tag.outputs.tag }}'"
+            exit 1
+          fi
+
+      - name: Build packages
+        run: |
+          # Create each sub-package to ensure they're in cache
+          conan create core \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+          
+          conan create consumer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+          
+          conan create producer \
+            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
+            --build=missing \
+            --build-test=missing
+
+      - name: Export Conan packages as individual tarballs
+        run: |
+          mkdir -p release-assets
+          
+          # Save each sub-package individually so consumers download only what they need
+          conan cache save "coderoast_ipc_core/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_core-${{ steps.tag.outputs.version }}.tgz"
+          conan cache save "coderoast_ipc_consumer/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_consumer-${{ steps.tag.outputs.version }}.tgz"
+          conan cache save "coderoast_ipc_producer/${{ steps.tag.outputs.version }}" \
+            --file="release-assets/coderoast_ipc_producer-${{ steps.tag.outputs.version }}.tgz"
+
+      - name: Attach tarballs to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG"
+          fi
+          gh release upload "$TAG" release-assets/*.tgz --clobber

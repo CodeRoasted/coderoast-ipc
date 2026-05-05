@@ -1,0 +1,84 @@
+CompileFlags:
+  CompilationDatabase: build
+  # Pin clangd to the same toolchain the project actually builds with
+  # (Debian gcc-13 + libstdc++). Without this clangd defaults to its own
+  # bundled clang which may pick up libc++ headers, causing ABI-mismatch
+  # false positives in fmt's consteval format-string checker (see the
+  # SPDLOG_LOGGER_* squiggles previously reported).
+  Add:
+    - -stdlib=libstdc++
+    - --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13
+
+---
+
+Diagnostics:
+  # spdlog + fmt's consteval format-string checker still trips clangd's
+  # frontend even with the libstdc++ toolchain pin above (likely a fmt
+  # header version skew between clangd's parser and the Conan-installed
+  # fmt). GCC compiles cleanly, so suppress the false positive globally;
+  # real format errors still surface at compile time on the CI matrix.
+  Suppress:
+    - invalid_consteval_call
+  ClangTidy:
+    Add:
+      - "*"
+    Remove:
+      - altera-struct-pack-align
+      - altera-unroll-loops
+      - cppcoreguidelines-pro-type-member-init
+      - cppcoreguidelines-pro-bounds-pointer-arithmetic
+      - cppcoreguidelines-pro-bounds-constant-array-index
+      - fuchsia-default-arguments-calls
+      - fuchsia-default-arguments-declarations
+      - fuchsia-overloaded-operator
+      - fuchsia-statically-constructed-objects
+      - fuchsia-trailing-return
+      - llvm-header-guard
+      - llvmlibc-callee-namespace
+      - llvmlibc-implementation-in-namespace
+      - llvmlibc-inline-function-decl
+      - llvmlibc-restrict-system-libc-headers
+      - llvm-include-order
+      - misc-non-private-member-variables-in-classes
+      - modernize-use-trailing-return-type
+      - readability-isolate-declaration
+      - readability-braces-around-statements
+      - google-readability-braces-around-statements
+      - hicpp-braces-around-statements
+      - bugprone-easily-swappable-parameters
+      - cppcoreguidelines-avoid-magic-numbers
+      - hicpp-avoid-c-arrays
+      - cppcoreguidelines-avoid-c-arrays
+      - cppcoreguidelines-pro-bounds-array-to-pointer-decay
+    CheckOptions:
+      misc-non-private-member-variables-in-classes.PrivateMemberSuffix: "_"
+      modernize-use-uniform-initialization.UseAssignment: "false"
+
+---
+
+# Remove conan deps
+If:
+  PathMatch: .conan2/.*
+Diagnostics:
+  Suppress: ["*"]
+
+---
+
+# Remove magic numbers inside tests
+If:
+  PathMatch: .*/tests/.*
+Diagnostics:
+  Suppress:
+    - readability-magic-numbers
+
+---
+
+# test_package is compiled during conan create, not in workspace build
+# It gets its dependencies from Conan's temporary build context
+# Suppress header-not-found errors since GTest paths vary by Conan cache layout
+If:
+  PathMatch: .*/test_package/.*
+Diagnostics:
+  Suppress:
+    - clang-diagnostic-error
+  UnusedIncludes: Strict
