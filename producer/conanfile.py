@@ -6,13 +6,13 @@ import os
 
 class CodeRoastIpcProducerConan(ConanFile):
     name = "coderoast_ipc_producer"
-    version = "1.0.0"
+    version = "1.0.1"
     package_type = "header-library"
     license = "Apache-2.0"
     description = "Producer-side helpers for coderoast-ipc (frame building, sequence tracking, shard distribution)."
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "api/*", "tests/*"
-    requires = "coderoast_ipc_core/1.0.0"
+    requires = "coderoast_ipc_core/1.0.1"
 
     def build_requirements(self):
         self.test_requires("gtest/1.17.0")
