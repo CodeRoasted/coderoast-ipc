@@ -4,6 +4,8 @@ Shared-memory IPC primitives for CodeRoast pipelines: high-performance SPSC chan
 
 **Status:** Header-only C++23 library. No runtime dependencies. Suitable for embedding in any log pipeline.
 
+**Current package baseline:** `coderoast_ipc_core/1.0.0`, `coderoast_ipc_consumer/1.0.0`, and `coderoast_ipc_producer/1.0.0`. Cross-repo compatibility is tracked in [../technical_docs/compatibility_matrix.md](../technical_docs/compatibility_matrix.md), and planning lives in [../technical_docs/ROADMAP.md](../technical_docs/ROADMAP.md).
+
 ---
 
 ## Package Overview
