@@ -136,6 +136,14 @@ namespace detail
             return loops_;
         }
 
+        /// Reset the loop counter so the next idle period starts back at the
+        /// fastest (spin) phase.  Call after a successful operation to ensure
+        /// the wait strategy re-enters the hot path promptly after a burst.
+        void reset() noexcept
+        {
+            loops_ = 0;
+        }
+
       private:
         static constexpr std::uint64_t kSpinLoops{64U};
         static constexpr std::uint64_t kYieldLoops{256U};

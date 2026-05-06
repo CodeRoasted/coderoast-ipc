@@ -6,7 +6,7 @@ import os
 
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
-    version = "1.0.0"
+    version = "1.0.1"
     package_type = "header-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
