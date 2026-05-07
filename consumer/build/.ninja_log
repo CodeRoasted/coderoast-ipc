@@ -1,7 +1,0 @@
-# ninja log v7
-1	6	1777874014187405108	/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/CMakeFiles/cmake.verify_globs	2606114cc1f2ce79
-1	5	1777874065328240982	/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/CMakeFiles/cmake.verify_globs	2606114cc1f2ce79
-5	2942	1777874065332410888	CMakeFiles/coderoast_ipc_consumer_tests.dir/tests/unit/test_shared_memory_source.cpp.o	1ce4711d3ca8e12a
-2943	3098	1777874068422311398	coderoast_ipc_consumer_tests	2a27363ceb738854
-2943	3098	1777874068422311398	coderoast_ipc_consumer_tests[1]_tests.cmake	2a27363ceb738854
-2943	3098	1777874068422311398	/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/coderoast_ipc_consumer_tests[1]_tests.cmake	2a27363ceb738854

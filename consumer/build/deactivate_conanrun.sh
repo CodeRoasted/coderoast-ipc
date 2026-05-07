@@ -1,1 +1,0 @@
-. "/home/windows/workspace/coderoast/coderoast-ipc/consumer/build/deactivate_conanrunenv-debug-x86_64.sh"
