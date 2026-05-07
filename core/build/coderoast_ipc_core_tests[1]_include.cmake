@@ -1,5 +1,0 @@
-if(EXISTS "/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests[1]_tests.cmake")
-  include("/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests[1]_tests.cmake")
-else()
-  add_test(coderoast_ipc_core_tests_NOT_BUILT coderoast_ipc_core_tests_NOT_BUILT)
-endif()

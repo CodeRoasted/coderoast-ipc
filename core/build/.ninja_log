@@ -1,9 +1,0 @@
-# ninja log v7
-1	6	1777873962215545481	/home/windows/workspace/coderoast/coderoast-ipc/core/build/CMakeFiles/cmake.verify_globs	e5a359dec8a4bf07
-1	6	1777873974065650047	/home/windows/workspace/coderoast/coderoast-ipc/core/build/CMakeFiles/cmake.verify_globs	e5a359dec8a4bf07
-6	1586	1777873974069822794	CMakeFiles/coderoast_ipc_core_bench.dir/benchmarks/bench_ipc.cpp.o	34672942e63c930e
-1587	1806	1777873975655467102	coderoast_ipc_core_bench	fb248534b2df8e61
-6	2463	1777873974069822794	CMakeFiles/coderoast_ipc_core_tests.dir/tests/unit/test_shared_memory_channel.cpp.o	80685543e98ef7f4
-2464	2626	1777873976690600074	coderoast_ipc_core_tests	52b845d4cfe054e
-2464	2626	1777873976690600074	coderoast_ipc_core_tests[1]_tests.cmake	52b845d4cfe054e
-2464	2626	1777873976690600074	/home/windows/workspace/coderoast/coderoast-ipc/core/build/coderoast_ipc_core_tests[1]_tests.cmake	52b845d4cfe054e

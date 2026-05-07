@@ -14,6 +14,9 @@ class CodeRoastIpcCoreConan(ConanFile):
 
     exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
 
+    def layout(self):
+        self.cpp.source.includedirs = ["api"]
+
     def build_requirements(self):
         self.test_requires("gtest/1.17.0")
         self.test_requires("benchmark/1.8.3")

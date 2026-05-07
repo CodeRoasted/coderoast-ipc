@@ -1,5 +1,5 @@
 # Build outputs
-/build*/
+**/build*/
 *.a
 *.o
 *.so
@@ -8,12 +8,11 @@
 # CMake / Ninja generated files
 compile_commands.json
 lint_output.txt
-CMakeUserPresets.json
+**/CMakeUserPresets.json
 .lint_cache
 
 # test_package — Conan regenerates these on every `conan create`
 test_package/build/
-test_package/CMakeUserPresets.json
 test_package/conanbuild.sh
 test_package/conanrun.sh
 test_package/conanbuildenv-*.sh
