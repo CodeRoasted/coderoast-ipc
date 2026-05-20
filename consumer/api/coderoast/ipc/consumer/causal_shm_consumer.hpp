@@ -17,14 +17,17 @@ namespace coderoast::ipc::consumer
 
 /// Thin facade composing the three-step pull-based causal SHM consumer:
 ///
-///   * Step 1 — `ShmTransportDrainer`  (per-shard background drain,
-///                                      never stalls on ordering)
+///   * Step 1 — `ShmTransportDrainer`  (threadless SHM pop, never stalls
+///                                      on ordering, never blocks)
 ///   * Step 2 — `CausalReorderBuffer`  (global CausalKey min-heap)
 ///   * Step 3 — `FrameEmitter`         (control-frame filter + diagnostics)
 ///
-/// The facade owns the three sub-objects by value, in the right order,
-/// so that destruction joins drain threads before the reorder buffer
-/// goes away.
+/// The whole pipeline runs on the caller's thread inside `try_next()`:
+/// the emitter asks the reorder buffer for the next causally-earliest
+/// frame; the buffer round-robin-polls every shard's SHM ring via the
+/// drainer; the drainer pops directly from each `SharedMemorySpscChannel`.
+/// There are no background threads, no mutexes, and no internal queues —
+/// frames move from SHM ring → per-shard heap → caller via two moves.
 ///
 /// All callers that only need "give me the next causally-earliest data
 /// frame from this sharded SHM channel" should use this facade and

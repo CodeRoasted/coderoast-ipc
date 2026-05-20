@@ -2,13 +2,10 @@
 
 #include <atomic>
 #include <cstddef>
-#include <deque>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -20,29 +17,40 @@ namespace coderoast::ipc::consumer
 
 /// **Step 1 of the pull-based causal SHM consumer pipeline.**
 ///
-/// Owns one background `std::jthread` per shard. Each thread spins on
-/// `SharedMemorySpscChannel::try_pop`, moves any received non-EOS frame
-/// into an in-process per-shard FIFO, and terminates on EOS after marking
-/// the shard as done.
+/// Owns one `SharedMemorySpscChannel` per shard. Holds **no background
+/// threads, no mutex, no internal queue.** Each call to `try_pull` is a
+/// direct, lock-free pop on the per-shard SPSC ring; the result is moved
+/// straight into the caller-provided `Frame`. EOS frames are absorbed
+/// (the per-shard `eos` flag is set) so callers never observe them.
+///
+/// **Why no threads?** The earlier design used N background threads each
+/// pushing into a mutex-protected deque. That added:
+///   * a cache-line ping-pong per frame between drain thread and consumer,
+///   * a `std::deque` heap allocation per chunk of frames,
+///   * a `std::this_thread::yield()` storm whenever shards were idle.
+/// `SharedMemorySpscChannel::try_pop` is already lock-free and cheap;
+/// round-robin polling N shards from a single consumer thread is bound
+/// by memory bandwidth, not by `try_pop` cost. Collapsing to one thread
+/// eliminates the FIFO copy step, removes mutex contention, and makes
+/// the whole pipeline single-producer / single-consumer end-to-end.
 ///
 /// **Strict invariants (do NOT relax):**
-///   * The drain loop never depends on causal ordering, watermarks, or
-///     reorder-buffer state. It frees SHM slots as fast as the producer
-///     fills them so the producer never blocks on backpressure.
-///   * EOS frames are NOT forwarded into the per-shard FIFO. They are
-///     reported via the `shard_eos` flag only. Downstream stages observe
-///     end-of-stream by polling `transport_complete()` together with the
-///     reorder buffer being empty.
-///   * Window-seal frames ARE forwarded (they carry watermark information
-///     consumers may want) but they do not set `shard_ever_had_data`.
+///   * `try_pull` never blocks. It returns `false` when the shard's SHM
+///     ring is empty *or* the shard has already observed EOS.
+///   * EOS frames are NOT returned to the caller. They flip the per-shard
+///     `eos` flag and `try_pull` returns `false`.
+///   * Window-seal frames ARE returned (they carry watermark information
+///     downstream stages may want) but they do not set `ever_had_data`.
+///   * No causal-ordering / watermark logic lives here — that is step 2's
+///     responsibility. This stage only knows about SHM transport state.
 ///
-/// **Thread-safety:** Per-shard FIFO is guarded by a mutex. A single
-/// consumer thread (the reorder buffer) calls `try_pull` for a given shard;
-/// the corresponding drain thread is the only writer. Other shards are
-/// independent.
+/// **Thread-safety:** A single consumer thread per shard. Different
+/// shards may in principle be polled by different consumer threads
+/// because each shard owns its own SPSC channel and atomic flags, but
+/// the recommended (and tested) usage drains all shards from one thread.
 ///
-/// **Lifetime:** Drain threads start on construction. `close()` (also
-/// invoked by the destructor) stops and joins them, then closes channels.
+/// **Lifetime:** All channels are opened on construction and closed on
+/// destruction. `close()` is idempotent and may be called manually.
 template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
 {
   public:
@@ -71,12 +79,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
                                                  config_.backpressure, config_.wait_strategy));
             shards_.emplace_back(std::make_unique<Shard>());
         }
-        threads_.reserve(config_.shard_count);
-        for (std::size_t shard_id{0}; shard_id < config_.shard_count; ++shard_id)
-        {
-            threads_.emplace_back([this, shard_id](std::stop_token st)
-                                  { drain_loop(shard_id, st); });
-        }
     }
 
     ShmTransportDrainer(const ShmTransportDrainer&) = delete;
@@ -94,18 +96,34 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         return shards_.size();
     }
 
-    /// Pop the next frame from shard `shard_id`'s in-process FIFO. Returns
-    /// false immediately if the FIFO is empty (never blocks).
+    /// Non-blocking pop from shard `shard_id`'s SPSC SHM ring. Returns
+    /// `false` immediately if the ring is empty, the shard has already
+    /// observed EOS, or the popped frame WAS the EOS marker (in which
+    /// case the shard's `eos` flag is set as a side-effect).
     [[nodiscard]] bool try_pull(std::size_t shard_id, Frame& out)
     {
         auto& shard{*shards_[shard_id]};
-        std::lock_guard<std::mutex> lock{shard.mutex};
-        if (shard.queue.empty())
+        if (shard.eos.load(std::memory_order_acquire))
         {
             return false;
         }
-        out = std::move(shard.queue.front());
-        shard.queue.pop_front();
+        if (!channels_[shard_id].try_pop(out))
+        {
+            return false;
+        }
+        const bool is_eos{coderoast::ipc::has_flag(
+            out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream)};
+        if (is_eos)
+        {
+            shard.eos.store(true, std::memory_order_release);
+            return false;
+        }
+        const bool is_seal{coderoast::ipc::has_flag(
+            out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
+        if (!is_seal)
+        {
+            shard.ever_had_data.store(true, std::memory_order_release);
+        }
         return true;
     }
 
@@ -117,13 +135,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     [[nodiscard]] bool shard_ever_had_data(std::size_t shard_id) const noexcept
     {
         return shards_[shard_id]->ever_had_data.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] std::size_t shard_buffered(std::size_t shard_id) const
-    {
-        auto& shard{*shards_[shard_id]};
-        std::lock_guard<std::mutex> lock{shard.mutex};
-        return shard.queue.size();
     }
 
     /// True once every shard has observed EOS. The reorder buffer must
@@ -151,21 +162,9 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         return out;
     }
 
-    /// Stop drain threads, join, then close channels. Idempotent.
+    /// Close every channel. Idempotent.
     void close() noexcept
     {
-        for (auto& thread : threads_)
-        {
-            thread.request_stop();
-        }
-        for (auto& thread : threads_)
-        {
-            if (thread.joinable())
-            {
-                thread.join();
-            }
-        }
-        threads_.clear();
         for (auto& chan : channels_)
         {
             chan.close();
@@ -181,50 +180,13 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
   private:
     struct Shard
     {
-        mutable std::mutex mutex;
-        std::deque<Frame> queue;
         std::atomic<bool> eos{false};
         std::atomic<bool> ever_had_data{false};
     };
 
-    void drain_loop(std::size_t shard_id, std::stop_token stop_token)
-    {
-        Frame frame{};
-        auto& chan{channels_[shard_id]};
-        auto& shard{*shards_[shard_id]};
-        while (!stop_token.stop_requested())
-        {
-            if (chan.try_pop(frame))
-            {
-                const bool is_eos{coderoast::ipc::has_flag(
-                    frame.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream)};
-                if (is_eos)
-                {
-                    shard.eos.store(true, std::memory_order_release);
-                    return;
-                }
-                const bool is_seal{coderoast::ipc::has_flag(
-                    frame.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
-                {
-                    std::lock_guard<std::mutex> lock{shard.mutex};
-                    shard.queue.push_back(std::move(frame));
-                }
-                if (!is_seal)
-                {
-                    shard.ever_had_data.store(true, std::memory_order_release);
-                }
-            }
-            else
-            {
-                std::this_thread::yield();
-            }
-        }
-    }
-
     Config config_{};
     std::vector<Channel> channels_;
     std::vector<std::unique_ptr<Shard>> shards_;
-    std::vector<std::jthread> threads_;
 };
 
 } // namespace coderoast::ipc::consumer
