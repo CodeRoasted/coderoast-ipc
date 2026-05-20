@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "coderoast/ipc/consumer/causal_reorder_buffer.hpp"
+#include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/frame.hpp"
 
 namespace coderoast::ipc::consumer
@@ -14,6 +16,33 @@ namespace coderoast::ipc::consumer
 /// Optionally filters out IPC control frames (window seals; EOS frames
 /// are already absorbed by the drainer) so downstream code only sees
 /// payload frames.
+///
+/// ─────────────────────────── Production contracts ───────────────────────────
+///
+/// **Threading model**
+///   * Single owner thread (the caller of `try_next`).
+///   * Holds no internal threads, no mutex.
+///
+/// **Backpressure**
+///   * Pure pull. Never blocks. `try_next` returns false when the buffer
+///     cannot select a frame.
+///
+/// **Determinism**
+///   * Output order is identical to the reorder buffer's output minus
+///     filtered control frames. Filter decision is purely a function of
+///     `frame.header.flags` — deterministic.
+///
+/// **Frame lifetime / move semantics**
+///   * Frames are moved out of the reorder buffer's heap into a local
+///     `candidate`, then `std::move`d into the caller's `out`. Two moves
+///     total per emitted frame, no copies.
+///
+/// **Error handling**
+///   * No exceptions. Counters are best-effort relaxed atomics for fast
+///     observability.
+///
+/// **Allocation**
+///   * Zero allocations on the hot path.
 ///
 /// Keeps emission diagnostics (`emitted()`, `control_dropped()`,
 /// `last_sequence()`) here, away from the ordering logic, so step 2 stays
@@ -74,6 +103,15 @@ class FrameEmitter
     [[nodiscard]] std::uint64_t last_sequence() const noexcept
     {
         return last_sequence_;
+    }
+
+    [[nodiscard]] EmitterMetrics metrics() const noexcept
+    {
+        return EmitterMetrics{
+            .emitted = emitted_,
+            .control_dropped = control_dropped_,
+            .last_sequence = last_sequence_,
+        };
     }
 
   private:

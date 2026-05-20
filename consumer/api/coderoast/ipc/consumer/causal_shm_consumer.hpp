@@ -8,6 +8,7 @@
 
 #include "coderoast/ipc/channel.hpp"
 #include "coderoast/ipc/consumer/causal_reorder_buffer.hpp"
+#include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/consumer/frame_emitter.hpp"
 #include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
 #include "coderoast/ipc/frame.hpp"
@@ -34,6 +35,26 @@ namespace coderoast::ipc::consumer
 /// never instantiate the sub-objects directly. Advanced callers (e.g. a
 /// test that injects a fault between stages) may compose the three
 /// classes themselves.
+///
+/// ─────────────────────────── Production contracts ───────────────────────────
+///
+/// **Threading model.** Single owner thread. The facade spawns no
+/// threads and holds no mutex. Backpressure, determinism, frame lifetime
+/// and error-handling contracts are inherited from the three sub-stages;
+/// see their individual headers.
+///
+/// **Observability.** Call `metrics()` for a `ConsumerMetrics` snapshot
+/// aggregating the three sub-stages' atomic counters. Register a
+/// `ConsumerObserver` via `set_observer()` to receive discrete events
+/// (shard EOS, frontier block, drain complete). Both are off the
+/// per-frame hot path.
+///
+/// **Lifecycle.** Construction opens every shard channel; failure
+/// throws and rolls back via RAII. `close()` releases the SHM handles
+/// explicitly; destruction does the same. EOS propagation: producers
+/// push an EOS frame to every shard; the drainer absorbs them; once
+/// every shard is EOS and every heap is empty, `all_shards_done()`
+/// returns true and the observer fires `kDrainComplete` exactly once.
 template <typename Frame = coderoast::ipc::DefaultLineFrame>
 class CausalShmConsumer
 {
@@ -113,6 +134,25 @@ class CausalShmConsumer
     void close() noexcept
     {
         drainer_.close();
+    }
+
+    /// Aggregate snapshot of every sub-stage's counters. See
+    /// `ConsumerMetrics` documentation for relaxed-atomic semantics.
+    [[nodiscard]] ConsumerMetrics metrics() const noexcept
+    {
+        return ConsumerMetrics{
+            .drainer = drainer_.metrics(),
+            .reorder = buffer_.metrics(),
+            .emitter = emitter_.metrics(),
+        };
+    }
+
+    /// Register the same observer with every sub-stage. Pass an empty
+    /// `ConsumerObserver` to detach.
+    void set_observer(ConsumerObserver observer)
+    {
+        drainer_.set_observer(observer);
+        buffer_.set_observer(std::move(observer));
     }
 
     // Sub-component accessors for advanced diagnostics / tests.

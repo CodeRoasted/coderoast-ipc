@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -7,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/consumer/ordered_line_frame_iterator.hpp"
 #include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
 #include "coderoast/ipc/frame.hpp"
@@ -56,6 +58,57 @@ template <typename Frame>
 /// Owns a per-shard CausalKey min-heap and runs a k-way merge over the
 /// shard heads to emit frames in global causal order.
 ///
+/// ─────────────────────────── Production contracts ───────────────────────────
+///
+/// **Threading model**
+///   * Single owner thread: the same thread that calls `try_select`.
+///   * Holds no internal threads. No mutex anywhere.
+///   * Reads the drainer's atomic flags via the public `shard_eos` /
+///     `shard_ever_had_data` accessors (acquire loads).
+///
+/// **Backpressure semantics**
+///   * Pure pull. Never blocks. `try_select` returns false when the
+///     frontier is incomplete; the caller decides whether to poll again
+///     or yield.
+///   * Per-shard heaps grow with backlog when other shards stall. There
+///     is no hard cap — under sustained imbalance, RSS grows. This is
+///     intentional: the drainer/producer side already enforces the SHM
+///     backpressure policy; throwing it away here would create silent
+///     data loss.
+///
+/// **Determinism contract**
+///   * Output is deterministic given identical drainer input. Ties are
+///     broken by `(logical_tick, agent_order, intra_agent_index, sequence)`
+///     in that order, which is a total order.
+///   * The frontier gate guarantees no late frame from a productive shard
+///     can be "passed" by a later frame from another shard.
+///
+/// **Frame lifetime / move semantics**
+///   * Frames are moved out of the drainer into the per-shard min-heap
+///     (`shards_[i].buffer.push(std::move(frame))`).
+///   * `try_select` moves the heap top out to the caller's frame.
+///     `priority_queue::top()` returns const-ref; we use a single
+///     `const_cast` to enable the move (the next `pop()` invalidates
+///     the slot). NO copies on the success path.
+///
+/// **Error handling strategy**
+///   * No exceptions thrown on the hot path. `refill` and `try_select`
+///     are `noexcept` in spirit (a `std::bad_alloc` from the heap push
+///     can propagate; in steady state allocations come from a small
+///     vector pool that pre-grows).
+///
+/// **Allocation strategy**
+///   * `std::priority_queue<Frame, std::vector<Frame>>` re-uses its
+///     internal vector. Once steady-state backlog stabilises, no more
+///     allocations happen.
+///   * `refill` and `try_select` perform zero heap allocations beyond
+///     the priority queue's growth.
+///
+/// **Observability**
+///   * `metrics()` returns a `ReorderMetrics` snapshot (relaxed atomics).
+///   * `set_observer()` registers a callback for `kFrontierBlock` and
+///     `kDrainComplete` discrete events. Off the per-frame hot path.
+///
 /// **Frontier rule:** before emitting any frame, every shard that has
 /// previously produced data and has not yet observed EOS must hold at
 /// least one candidate frame. This prevents emission of a higher-tick
@@ -86,6 +139,7 @@ class CausalReorderBuffer
     /// what is already buffered in-process; it never reaches into SHM.
     void refill()
     {
+        refills_.fetch_add(1U, std::memory_order_relaxed);
         Frame frame{};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
@@ -101,6 +155,7 @@ class CausalReorderBuffer
     /// or no shard has a buffered candidate.
     [[nodiscard]] bool try_select(Frame& out)
     {
+        selects_attempted_.fetch_add(1U, std::memory_order_relaxed);
         refill();
 
         // Frontier gate.
@@ -109,6 +164,8 @@ class CausalReorderBuffer
             if (drainer_->shard_ever_had_data(shard_id) && !drainer_->shard_eos(shard_id) &&
                 shards_[shard_id].buffer.empty())
             {
+                frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
+                notify(ConsumerEvent::kFrontierBlock, shard_id);
                 return false;
             }
         }
@@ -128,11 +185,18 @@ class CausalReorderBuffer
         }
         if (best == kNoIndex)
         {
+            // Every shard is EOS with empty heap → fully drained.
+            if (!drain_complete_notified_ && drained())
+            {
+                drain_complete_notified_ = true;
+                notify(ConsumerEvent::kDrainComplete, ConsumerEventPayload::kAllShards);
+            }
             return false;
         }
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         out = std::move(const_cast<Frame&>(shards_[best].buffer.top()));
         shards_[best].buffer.pop();
+        selects_succeeded_.fetch_add(1U, std::memory_order_relaxed);
         return true;
     }
 
@@ -177,7 +241,31 @@ class CausalReorderBuffer
         return out;
     }
 
+    [[nodiscard]] ReorderMetrics metrics() const noexcept
+    {
+        return ReorderMetrics{
+            .refills = refills_.load(std::memory_order_acquire),
+            .selects_attempted = selects_attempted_.load(std::memory_order_acquire),
+            .selects_succeeded = selects_succeeded_.load(std::memory_order_acquire),
+            .frontier_blocks = frontier_blocks_.load(std::memory_order_acquire),
+        };
+    }
+
+    /// Register a discrete-event observer. See drainer documentation.
+    void set_observer(ConsumerObserver observer)
+    {
+        observer_ = std::move(observer);
+    }
+
   private:
+    void notify(ConsumerEvent event, std::size_t shard_id)
+    {
+        if (observer_)
+        {
+            observer_(ConsumerEventPayload{.event = event, .shard_id = shard_id});
+        }
+    }
+
     struct Greater
     {
         bool operator()(const Frame& lhs, const Frame& rhs) const noexcept
@@ -196,6 +284,13 @@ class CausalReorderBuffer
 
     ShmTransportDrainer<Frame>* drainer_{nullptr};
     std::vector<ShardState> shards_;
+    ConsumerObserver observer_{};
+    bool drain_complete_notified_{false};
+
+    std::atomic<std::uint64_t> refills_{0};
+    std::atomic<std::uint64_t> selects_attempted_{0};
+    std::atomic<std::uint64_t> selects_succeeded_{0};
+    std::atomic<std::uint64_t> frontier_blocks_{0};
 };
 
 } // namespace coderoast::ipc::consumer

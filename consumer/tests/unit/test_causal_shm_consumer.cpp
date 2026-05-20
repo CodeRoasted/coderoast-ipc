@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <unistd.h>
@@ -27,6 +28,7 @@
 #include "coderoast/ipc/channel.hpp"
 #include "coderoast/ipc/consumer/causal_reorder_buffer.hpp"
 #include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
+#include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/consumer/frame_emitter.hpp"
 #include "coderoast/ipc/consumer/scoped_shm_channel_set.hpp"
 #include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
@@ -312,6 +314,155 @@ TEST(CausalShmConsumer, ControlFramesAreFilteredByDefault)
     EXPECT_EQ(emitted[0], "data1");
     EXPECT_EQ(emitted[1], "data2");
     EXPECT_EQ(consumer.emitter().control_dropped(), 1U);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Observability — atomic counters + discrete-event observer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DrainerMetrics, CountsPullsEosAndSeals)
+{
+    ProducerHarness producers{"metrics_drainer", 1};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 1}};
+
+    EXPECT_EQ(drainer.metrics().pulls_attempted, 0U);
+
+    (void)producers.producers[0].push(make_frame(1, 0, "a"));
+    (void)producers.producers[0].push(
+        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    (void)producers.producers[0].push(
+        make_frame(3, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+
+    Frame out{};
+    EXPECT_TRUE(drainer.try_pull(0, out)); // data
+    EXPECT_TRUE(drainer.try_pull(0, out)); // seal (surfaced as data=true)
+    EXPECT_FALSE(drainer.try_pull(0, out)); // EOS absorbed
+    EXPECT_FALSE(drainer.try_pull(0, out)); // already EOS — fast-path
+
+    const auto metrics{drainer.metrics()};
+    EXPECT_EQ(metrics.pulls_attempted, 4U);
+    // pulls_succeeded counts only frames returned to the caller: data + seal.
+    EXPECT_EQ(metrics.pulls_succeeded, 2U);
+    EXPECT_EQ(metrics.eos_observed, 1U);
+    EXPECT_EQ(metrics.seals_observed, 1U);
+}
+
+TEST(DrainerObserver, FiresOnShardEosTransition)
+{
+    ProducerHarness producers{"obs_eos", 2};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
+
+    std::vector<std::size_t> eos_shards;
+    drainer.set_observer(
+        [&eos_shards](const coderoast::ipc::consumer::ConsumerEventPayload& event)
+        {
+            if (event.event == coderoast::ipc::consumer::ConsumerEvent::kShardEos)
+            {
+                eos_shards.push_back(event.shard_id);
+            }
+        });
+
+    (void)producers.producers[1].push(
+        make_frame(1, 1, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    (void)producers.producers[0].push(
+        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+
+    Frame out{};
+    EXPECT_FALSE(drainer.try_pull(1, out));
+    EXPECT_FALSE(drainer.try_pull(0, out));
+
+    ASSERT_EQ(eos_shards.size(), 2U);
+    EXPECT_EQ(eos_shards[0], 1U);
+    EXPECT_EQ(eos_shards[1], 0U);
+}
+
+TEST(ReorderMetrics, CountsRefillsSelectsAndFrontierBlocks)
+{
+    ProducerHarness producers{"metrics_reorder", 2};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
+    Buffer buffer{drainer};
+
+    // No data anywhere → try_select returns false; frontier gate does not
+    // fire because no shard has ever_had_data yet.
+    Frame out{};
+    EXPECT_FALSE(buffer.try_select(out));
+
+    // Both shards produce before any select → frontier satisfied; the
+    // first select pops the lower-tick frame (shard 1, tick=5).
+    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*tick=*/10));
+    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*tick=*/5));
+    ASSERT_TRUE(buffer.try_select(out));
+
+    // Shard 1 now has empty heap, ever_had_data=true, !eos → frontier
+    // gate MUST block the next select even though shard 0 still holds
+    // s0-a.
+    EXPECT_FALSE(buffer.try_select(out));
+
+    const auto metrics{buffer.metrics()};
+    EXPECT_GE(metrics.refills, 3U);
+    EXPECT_EQ(metrics.selects_attempted, 3U);
+    EXPECT_EQ(metrics.selects_succeeded, 1U);
+    EXPECT_GE(metrics.frontier_blocks, 1U);
+}
+
+TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
+{
+    ProducerHarness producers{"obs_reorder", 1};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 1}};
+    Buffer buffer{drainer};
+
+    std::vector<coderoast::ipc::consumer::ConsumerEvent> events;
+    buffer.set_observer(
+        [&events](const coderoast::ipc::consumer::ConsumerEventPayload& event)
+        { events.push_back(event.event); });
+
+    (void)producers.producers[0].push(make_frame(1, 0, "x"));
+    Frame out{};
+    ASSERT_TRUE(buffer.try_select(out));
+
+    // EOS + empty heap → next try_select should fire kDrainComplete exactly once.
+    (void)producers.producers[0].push(
+        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    EXPECT_FALSE(buffer.try_select(out));
+    EXPECT_FALSE(buffer.try_select(out)); // idempotent
+
+    const auto drain_complete{coderoast::ipc::consumer::ConsumerEvent::kDrainComplete};
+    const auto count{
+        static_cast<std::size_t>(std::count(events.begin(), events.end(), drain_complete))};
+    EXPECT_EQ(count, 1U) << "kDrainComplete must fire exactly once";
+}
+
+TEST(ConsumerMetrics, FacadeAggregatesAllStages)
+{
+    ProducerHarness producers{"facade_metrics", 1};
+    Consumer consumer{Consumer::Config{.channel = producers.base, .shard_count = 1}};
+
+    (void)producers.producers[0].push(make_frame(1, 0, "alpha"));
+    (void)producers.producers[0].push(
+        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    (void)producers.producers[0].push(make_frame(3, 0, "beta"));
+    (void)producers.producers[0].push(
+        make_frame(4, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+
+    Frame out{};
+    std::size_t emitted_count{0};
+    while (!consumer.all_shards_done())
+    {
+        if (consumer.try_next(out))
+        {
+            ++emitted_count;
+        }
+    }
+
+    EXPECT_EQ(emitted_count, 2U);
+    const auto metrics{consumer.metrics()};
+    EXPECT_GE(metrics.drainer.pulls_attempted, 4U);
+    EXPECT_EQ(metrics.drainer.eos_observed, 1U);
+    EXPECT_EQ(metrics.drainer.seals_observed, 1U);
+    EXPECT_EQ(metrics.emitter.emitted, 2U);
+    EXPECT_EQ(metrics.emitter.control_dropped, 1U);
+    EXPECT_EQ(metrics.emitter.last_sequence, 3U);
+    EXPECT_GE(metrics.reorder.selects_succeeded, 3U); // 2 data + 1 seal
 }
 
 // NOLINTEND : Unit tests intentionally favour clarity over style.

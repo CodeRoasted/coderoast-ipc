@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "coderoast/ipc/channel.hpp"
+#include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/frame.hpp"
 
 namespace coderoast::ipc::consumer
@@ -23,16 +25,66 @@ namespace coderoast::ipc::consumer
 /// straight into the caller-provided `Frame`. EOS frames are absorbed
 /// (the per-shard `eos` flag is set) so callers never observe them.
 ///
-/// **Why no threads?** The earlier design used N background threads each
-/// pushing into a mutex-protected deque. That added:
-///   * a cache-line ping-pong per frame between drain thread and consumer,
-///   * a `std::deque` heap allocation per chunk of frames,
-///   * a `std::this_thread::yield()` storm whenever shards were idle.
-/// `SharedMemorySpscChannel::try_pop` is already lock-free and cheap;
-/// round-robin polling N shards from a single consumer thread is bound
-/// by memory bandwidth, not by `try_pop` cost. Collapsing to one thread
-/// eliminates the FIFO copy step, removes mutex contention, and makes
-/// the whole pipeline single-producer / single-consumer end-to-end.
+/// ─────────────────────────── Production contracts ───────────────────────────
+///
+/// **Threading model**
+///   * Single consumer thread per shard (the design also supports a
+///     single consumer thread for all shards, which is the tested case).
+///   * No threads are spawned by this class. It never blocks.
+///   * Producers (one per shard, separate processes) push concurrently
+///     into the SPSC rings; that path is `coderoast::ipc::channel`'s
+///     responsibility, not ours.
+///
+/// **Backpressure semantics**
+///   * SHM full → producer side handles per `BackpressurePolicy`
+///     (Block/DropOldest/DropNewest). The drainer never sees SHM-full;
+///     it only sees "ring empty" via `try_pop` returning false.
+///   * Consumer slow → ring fills up; producer either spins (Block) or
+///     drops frames (Drop*). Either way, the drainer's `try_pull` keeps
+///     returning whatever is in the ring at its own pace.
+///
+/// **Determinism contract**
+///   * Per-shard order is preserved (SPSC FIFO).
+///   * Cross-shard order is NOT preserved here — that is step 2's job.
+///   * Output is deterministic given identical SHM contents and identical
+///     `try_pull` interleavings. There is no randomness, no time-based
+///     decision, no allocation that could fail differently between runs.
+///
+/// **Frame lifetime / move semantics**
+///   * `try_pop` moves the frame out of the SHM ring slot into the
+///     caller-provided `Frame&`. Zero-copy aside from the in-slot move
+///     (DefaultLineFrame is trivially relocatable; the payload bytes are
+///     copied because they live in the slot).
+///   * The caller owns the frame after a successful `try_pull`. The
+///     drainer keeps no reference to it.
+///
+/// **Error handling strategy**
+///   * Construction-time invariants (`shard_count == 0`, channel open
+///     failure) fail fast via exceptions.
+///   * Run-time errors are absent by construction: `try_pop` returning
+///     false is "no data" and does not propagate.
+///   * Poison frames (corrupted header) are NOT detected here; downstream
+///     stages MAY detect them via flag inspection.
+///
+/// **Allocation strategy**
+///   * No allocations on the hot path. `try_pull` is allocation-free.
+///   * One-time allocations in the constructor only: channel vector,
+///     shard state vector, per-shard atomic block.
+///
+/// **Observability**
+///   * `metrics()` returns a `DrainerMetrics` snapshot with counters
+///     updated by `memory_order_relaxed` writes — cost is one atomic
+///     increment per `try_pull` regardless of outcome.
+///   * `set_observer()` registers a callback invoked on discrete
+///     lifecycle events only (EOS observed); never on the per-frame
+///     hot path. Default = no observer = exactly one branch per event.
+///
+/// **Lifecycle / shutdown**
+///   * Construction opens every shard channel. Failure throws and rolls
+///     back (RAII destructors close already-opened channels).
+///   * `close()` is idempotent and may be called before destruction to
+///     release SHM handles explicitly.
+///   * Destruction calls `close()` automatically.
 ///
 /// **Strict invariants (do NOT relax):**
 ///   * `try_pull` never blocks. It returns `false` when the shard's SHM
@@ -43,14 +95,6 @@ namespace coderoast::ipc::consumer
 ///     downstream stages may want) but they do not set `ever_had_data`.
 ///   * No causal-ordering / watermark logic lives here — that is step 2's
 ///     responsibility. This stage only knows about SHM transport state.
-///
-/// **Thread-safety:** A single consumer thread per shard. Different
-/// shards may in principle be polled by different consumer threads
-/// because each shard owns its own SPSC channel and atomic flags, but
-/// the recommended (and tested) usage drains all shards from one thread.
-///
-/// **Lifetime:** All channels are opened on construction and closed on
-/// destruction. `close()` is idempotent and may be called manually.
 template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
 {
   public:
@@ -103,6 +147,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     [[nodiscard]] bool try_pull(std::size_t shard_id, Frame& out)
     {
         auto& shard{*shards_[shard_id]};
+        pulls_attempted_.fetch_add(1U, std::memory_order_relaxed);
         if (shard.eos.load(std::memory_order_acquire))
         {
             return false;
@@ -116,14 +161,21 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         if (is_eos)
         {
             shard.eos.store(true, std::memory_order_release);
+            eos_observed_.fetch_add(1U, std::memory_order_relaxed);
+            notify(ConsumerEvent::kShardEos, shard_id);
             return false;
         }
         const bool is_seal{coderoast::ipc::has_flag(
             out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
-        if (!is_seal)
+        if (is_seal)
+        {
+            seals_observed_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        else
         {
             shard.ever_had_data.store(true, std::memory_order_release);
         }
+        pulls_succeeded_.fetch_add(1U, std::memory_order_relaxed);
         return true;
     }
 
@@ -162,6 +214,26 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         return out;
     }
 
+    /// Snapshot of the hot-path counters. Internally inconsistent under
+    /// heavy concurrency by design (relaxed atomics, no global lock).
+    [[nodiscard]] DrainerMetrics metrics() const noexcept
+    {
+        return DrainerMetrics{
+            .pulls_attempted = pulls_attempted_.load(std::memory_order_acquire),
+            .pulls_succeeded = pulls_succeeded_.load(std::memory_order_acquire),
+            .eos_observed = eos_observed_.load(std::memory_order_acquire),
+            .seals_observed = seals_observed_.load(std::memory_order_acquire),
+        };
+    }
+
+    /// Register a discrete-event observer (EOS transitions). Replace
+    /// with an empty function to detach. Thread-safety: callers must not
+    /// race this with `try_pull`; intended for construction-time wiring.
+    void set_observer(ConsumerObserver observer)
+    {
+        observer_ = std::move(observer);
+    }
+
     /// Close every channel. Idempotent.
     void close() noexcept
     {
@@ -178,6 +250,14 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     }
 
   private:
+    void notify(ConsumerEvent event, std::size_t shard_id)
+    {
+        if (observer_)
+        {
+            observer_(ConsumerEventPayload{.event = event, .shard_id = shard_id});
+        }
+    }
+
     struct Shard
     {
         std::atomic<bool> eos{false};
@@ -187,6 +267,12 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     Config config_{};
     std::vector<Channel> channels_;
     std::vector<std::unique_ptr<Shard>> shards_;
+    ConsumerObserver observer_{};
+
+    std::atomic<std::uint64_t> pulls_attempted_{0};
+    std::atomic<std::uint64_t> pulls_succeeded_{0};
+    std::atomic<std::uint64_t> eos_observed_{0};
+    std::atomic<std::uint64_t> seals_observed_{0};
 };
 
 } // namespace coderoast::ipc::consumer
