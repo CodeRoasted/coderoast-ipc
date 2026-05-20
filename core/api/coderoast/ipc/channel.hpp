@@ -201,7 +201,7 @@ template <typename Frame> class SharedMemorySpscChannel
         return *this;
     }
 
-    ~SharedMemorySpscChannel()
+    ~SharedMemorySpscChannel() noexcept
     {
         close();
     }

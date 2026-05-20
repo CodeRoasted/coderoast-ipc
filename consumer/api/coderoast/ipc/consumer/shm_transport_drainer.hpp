@@ -130,7 +130,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     ShmTransportDrainer(ShmTransportDrainer&&) = delete;
     ShmTransportDrainer& operator=(ShmTransportDrainer&&) = delete;
 
-    ~ShmTransportDrainer()
+    ~ShmTransportDrainer() noexcept
     {
         close();
     }
