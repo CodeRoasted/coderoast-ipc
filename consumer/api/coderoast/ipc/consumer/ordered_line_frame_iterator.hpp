@@ -313,7 +313,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
             next_sequence_ = transport_buffer_.top().header.sequence;
         }
 
-        while (!transport_buffer_.empty() && transport_buffer_.top().header.sequence < next_sequence_)
+        while (!transport_buffer_.empty() &&
+               transport_buffer_.top().header.sequence < next_sequence_)
         {
             transport_buffer_.pop();
         }
@@ -340,16 +341,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
         //      eventually blocks on SHM backpressure).  Determinism is
         //      preserved because consumers re-sort the captured frames by
         //      causal key after the stream completes.
-        const bool all_eos = !transport_eos_.empty() && [this]() noexcept {
-            for (const bool eos : transport_eos_)
-            {
-                if (!eos)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }();
+        const bool all_eos =
+            !transport_eos_.empty() && std::ranges::all_of(transport_eos_, std::identity{});
 
         if (available_sequence > next_sequence_ &&
             (config_.gap_policy == SequenceGapPolicy::SkipMissing || all_eos))
@@ -441,8 +434,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                 continue;
             }
             if (best == kNoIndex ||
-                causal_less(causal_state_[shard_id].buffer.top(),
-                            causal_state_[best].buffer.top()))
+                causal_less(causal_state_[shard_id].buffer.top(), causal_state_[best].buffer.top()))
             {
                 best = shard_id;
             }

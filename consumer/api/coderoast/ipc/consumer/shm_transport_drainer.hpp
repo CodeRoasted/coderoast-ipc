@@ -267,7 +267,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     Config config_{};
     std::vector<Channel> channels_;
     std::vector<std::unique_ptr<Shard>> shards_;
-    ConsumerObserver observer_{};
+    ConsumerObserver observer_;
 
     std::atomic<std::uint64_t> pulls_attempted_{0};
     std::atomic<std::uint64_t> pulls_succeeded_{0};

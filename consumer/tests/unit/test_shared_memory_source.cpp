@@ -129,8 +129,10 @@ TEST(OrderedLineFrameIterator, TransportSequenceDrainsAheadOfMissingFrame)
     ASSERT_TRUE(iterator.try_next(out));
     EXPECT_EQ(out.header.sequence, 2U);
 
-    (void)producer0.push(make_frame(3, 0, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
-    (void)producer1.push(make_frame(4, 1, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    (void)producer0.push(
+        make_frame(3, 0, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    (void)producer1.push(
+        make_frame(4, 1, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
 
     ASSERT_TRUE(iterator.try_next(out));
     EXPECT_TRUE(coderoast::ipc::has_flag(

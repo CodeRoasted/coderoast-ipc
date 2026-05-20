@@ -55,8 +55,7 @@ namespace coderoast::ipc::consumer
 /// push an EOS frame to every shard; the drainer absorbs them; once
 /// every shard is EOS and every heap is empty, `all_shards_done()`
 /// returns true and the observer fires `kDrainComplete` exactly once.
-template <typename Frame = coderoast::ipc::DefaultLineFrame>
-class CausalShmConsumer
+template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalShmConsumer
 {
   public:
     using Drainer = ShmTransportDrainer<Frame>;

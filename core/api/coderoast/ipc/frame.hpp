@@ -48,8 +48,7 @@ enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
     kLineFrameFlagWindowSeal = 1U << 2U,
 };
 
-[[nodiscard]] constexpr LineFrameFlags operator|(LineFrameFlags lhs,
-                                                 LineFrameFlags rhs) noexcept
+[[nodiscard]] constexpr LineFrameFlags operator|(LineFrameFlags lhs, LineFrameFlags rhs) noexcept
 {
     using Raw = std::underlying_type_t<LineFrameFlags>;
     return static_cast<LineFrameFlags>(static_cast<Raw>(lhs) | static_cast<Raw>(rhs));

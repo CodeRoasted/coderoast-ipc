@@ -15,11 +15,10 @@
 // The tests use real SHM channels (via SharedMemorySpscChannel) and
 // unique PID-suffixed names so they are safe under parallel ctest.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
 #include <string>
-#include <string_view>
 #include <unistd.h>
 #include <vector>
 
@@ -30,7 +29,6 @@
 #include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
 #include "coderoast/ipc/consumer/consumer_metrics.hpp"
 #include "coderoast/ipc/consumer/frame_emitter.hpp"
-#include "coderoast/ipc/consumer/scoped_shm_channel_set.hpp"
 #include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
 #include "coderoast/ipc/frame.hpp"
 
@@ -334,8 +332,8 @@ TEST(DrainerMetrics, CountsPullsEosAndSeals)
         make_frame(3, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
 
     Frame out{};
-    EXPECT_TRUE(drainer.try_pull(0, out)); // data
-    EXPECT_TRUE(drainer.try_pull(0, out)); // seal (surfaced as data=true)
+    EXPECT_TRUE(drainer.try_pull(0, out));  // data
+    EXPECT_TRUE(drainer.try_pull(0, out));  // seal (surfaced as data=true)
     EXPECT_FALSE(drainer.try_pull(0, out)); // EOS absorbed
     EXPECT_FALSE(drainer.try_pull(0, out)); // already EOS — fast-path
 
@@ -412,9 +410,8 @@ TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
     Buffer buffer{drainer};
 
     std::vector<coderoast::ipc::consumer::ConsumerEvent> events;
-    buffer.set_observer(
-        [&events](const coderoast::ipc::consumer::ConsumerEventPayload& event)
-        { events.push_back(event.event); });
+    buffer.set_observer([&events](const coderoast::ipc::consumer::ConsumerEventPayload& event)
+                        { events.push_back(event.event); });
 
     (void)producers.producers[0].push(make_frame(1, 0, "x"));
     Frame out{};

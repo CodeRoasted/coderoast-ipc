@@ -47,8 +47,7 @@ namespace coderoast::ipc::consumer
 /// Keeps emission diagnostics (`emitted()`, `control_dropped()`,
 /// `last_sequence()`) here, away from the ordering logic, so step 2 stays
 /// purely about correctness.
-template <typename Frame = coderoast::ipc::DefaultLineFrame>
-class FrameEmitter
+template <typename Frame = coderoast::ipc::DefaultLineFrame> class FrameEmitter
 {
   public:
     struct Config

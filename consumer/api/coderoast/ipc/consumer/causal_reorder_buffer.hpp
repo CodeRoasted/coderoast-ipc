@@ -119,8 +119,7 @@ template <typename Frame>
 /// **Separation of concerns:** this stage knows nothing about transport
 /// (SHM rings, EOS frames). It pulls *opaque* frames from a
 /// `ShmTransportDrainer` via the narrow `try_pull/shard_eos/...` API.
-template <typename Frame = coderoast::ipc::DefaultLineFrame>
-class CausalReorderBuffer
+template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorderBuffer
 {
   public:
     explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer)
@@ -177,8 +176,8 @@ class CausalReorderBuffer
             {
                 continue;
             }
-            if (best == kNoIndex || causal_less(shards_[shard_id].buffer.top(),
-                                                shards_[best].buffer.top()))
+            if (best == kNoIndex ||
+                causal_less(shards_[shard_id].buffer.top(), shards_[best].buffer.top()))
             {
                 best = shard_id;
             }
@@ -284,7 +283,7 @@ class CausalReorderBuffer
 
     ShmTransportDrainer<Frame>* drainer_{nullptr};
     std::vector<ShardState> shards_;
-    ConsumerObserver observer_{};
+    ConsumerObserver observer_;
     bool drain_complete_notified_{false};
 
     std::atomic<std::uint64_t> refills_{0};
