@@ -22,7 +22,7 @@ namespace coderoast::ipc
 {
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
-inline constexpr std::uint32_t kSharedChannelAbiVersion{1U};
+inline constexpr std::uint32_t kSharedChannelAbiVersion{2U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
 enum class BackpressurePolicy : std::uint8_t

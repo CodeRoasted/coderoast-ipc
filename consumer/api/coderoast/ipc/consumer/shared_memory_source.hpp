@@ -48,8 +48,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
         std::size_t shard_count{1};
         std::uint64_t first_sequence{1};
         SequenceGapPolicy gap_policy{SequenceGapPolicy::WaitForMissing};
-        coderoast::ipc::BackpressurePolicy backpressure{
-            coderoast::ipc::BackpressurePolicy::DropNewest};
+        FrameOrdering ordering{FrameOrdering::CausalKey};
+        coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
         coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
     };
 
@@ -61,6 +61,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
               .shard_count = config.shard_count,
               .first_sequence = config.first_sequence,
               .gap_policy = config.gap_policy,
+              .ordering = config.ordering,
               .backpressure = config.backpressure,
               .wait_strategy = config.wait_strategy,
           }}
@@ -83,14 +84,27 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
     // WaitForMissing policy).
     [[nodiscard]] bool try_pop(std::string_view& out_payload)
     {
-        if (!iterator_.try_next(current_frame_))
+        while (iterator_.try_next(current_frame_))
         {
-            return false;
+            if (coderoast::ipc::is_control_frame(current_frame_.header.flags))
+            {
+                continue;
+            }
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            out_payload =
+                std::string_view{reinterpret_cast<const char*>(current_frame_.payload.data()),
+                                 current_frame_.header.payload_size};
+            return true;
         }
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        out_payload = std::string_view{reinterpret_cast<const char*>(current_frame_.payload.data()),
-                                       current_frame_.header.payload_size};
-        return true;
+        return false;
+    }
+
+    // Attempt to consume the next ordered frame, including control frames such
+    // as WindowSeal and EndOfStream. Callers that need deterministic replay
+    // completion should use this API instead of the payload-only try_pop().
+    [[nodiscard]] bool try_pop_frame(Frame& out_frame)
+    {
+        return iterator_.try_next(out_frame);
     }
 
     // Shard id carried in the frame header of the most recently popped frame.

@@ -8,7 +8,7 @@
 namespace coderoast::ipc
 {
 
-inline constexpr std::uint32_t kIpcAbiVersion{1U};
+inline constexpr std::uint32_t kIpcAbiVersion{2U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
 // uint16_t is intentional: stable IPC ABI (paired with `flags` to
@@ -48,15 +48,37 @@ enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
     kLineFrameFlagWindowSeal = 1U << 2U,
 };
 
+[[nodiscard]] constexpr LineFrameFlags operator|(LineFrameFlags lhs,
+                                                 LineFrameFlags rhs) noexcept
+{
+    using Raw = std::underlying_type_t<LineFrameFlags>;
+    return static_cast<LineFrameFlags>(static_cast<Raw>(lhs) | static_cast<Raw>(rhs));
+}
+
+[[nodiscard]] constexpr bool has_flag(LineFrameFlags flags, LineFrameFlags flag) noexcept
+{
+    using Raw = std::underlying_type_t<LineFrameFlags>;
+    return (static_cast<Raw>(flags) & static_cast<Raw>(flag)) != 0U;
+}
+
+[[nodiscard]] constexpr bool is_control_frame(LineFrameFlags flags) noexcept
+{
+    return has_flag(flags, LineFrameFlags::kLineFrameFlagWindowSeal) ||
+           has_flag(flags, LineFrameFlags::kLineFrameFlagEndOfStream);
+}
+
 struct LineFrameHeader
 {
     std::uint64_t sequence{0};
     std::uint64_t shard_sequence{0};
     std::uint64_t timestamp_unix_ns{0};
+    std::uint64_t logical_tick{0};
     std::uint64_t run_id{0};
     std::uint64_t window_id{0};
     std::uint32_t payload_size{0};
     std::uint32_t agent_id{0};
+    std::uint32_t agent_order{0};
+    std::uint32_t intra_agent_index{0};
     std::uint32_t shard_id{0};
     FrameFormat format{FrameFormat::Unknown};
     LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};

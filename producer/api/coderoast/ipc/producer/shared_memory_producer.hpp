@@ -7,7 +7,7 @@
 // in any producer sink or adapter.
 //
 // Responsibilities:
-//   * Global + per-shard sequence tracking
+//   * Transport + per-shard sequence tracking
 //   * Frame header construction
 //   * Format/policy enum mapping
 //   * Agent ID stable hashing
@@ -38,9 +38,11 @@ namespace coderoast::ipc::producer
     return hash;
 }
 
-// Frame builder: tracks global + per-shard sequences and assembles frame
-// headers. Callers provide the payload bytes; this class handles sequencing and
-// header setup.
+// Frame builder: tracks transport + per-shard sequences and assembles frame
+// headers. Callers provide the payload bytes; this class handles sequence and
+// header setup. The transport sequence is unique and useful for tracing/gap
+// detection; when multiple producer threads call build(), it reflects runtime
+// arbitration and is not a deterministic simulation-order key.
 template <typename Frame = DefaultLineFrame> class FrameBuilder
 {
   public:
@@ -62,7 +64,7 @@ template <typename Frame = DefaultLineFrame> class FrameBuilder
     FrameBuilder& operator=(FrameBuilder&&) = default;
     ~FrameBuilder() = default;
 
-    // Build a frame header with the next global and per-shard sequences.
+    // Build a frame header with the next transport and per-shard sequences.
     // Caller provides shard_id (modulo'd vs shard_count internally),
     // timestamp, payload_size, agent ID, format, and frame flags.
     // Returns the assembled frame with populated header.

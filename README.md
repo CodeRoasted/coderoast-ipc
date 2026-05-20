@@ -121,13 +121,13 @@ SharedMemoryChannel<DefaultLineFrame> receiver{
 **Key Types:**
 - `SharedMemoryChannel<Frame>` - SPSC queue template
 - `DefaultLineFrame` - 4KB payload frames (customizable)
-- `LineFrameHeader` - Sequence, timestamp, format, payload metadata
+- `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
 - `BackpressurePolicy` - Block, DropNewest, OverwriteOldest
 - `WaitStrategy` - SpinYieldPark, YieldPark, ParkOnly
 
 ### Consumer Package: Ordered Frame Stream
 
-Adapter for consuming ordered frame sequences with gap handling:
+Adapter for consuming frames by the `header.sequence` values supplied by the producer, with gap handling:
 
 ```cpp
 #include "coderoast/ipc/consumer/shared_memory_source.hpp"
@@ -138,8 +138,11 @@ using namespace coderoast::ipc::consumer;
 SharedMemorySource<> source{SharedMemorySource<>::Config{
     .channel = "myapp.pipeline",
     .shard_count = 4,
-    .first_sequence = 1,
-    .gap_policy = SequenceGapPolicy::WaitForMissing,
+    .first_sequence = 1U,
+    .gap_policy     = coderoast::ipc::consumer::SequenceGapPolicy::WaitForMissing,
+    .ordering       = coderoast::ipc::consumer::FrameOrdering::CausalKey,
+    .backpressure   = coderoast::ipc::BackpressurePolicy::Block,
+    .wait_strategy  = coderoast::ipc::WaitStrategy::SpinYieldPark,
 }};
 
 // Consume ordered frames
@@ -155,9 +158,21 @@ while (source.try_pop(payload)) {
 
 **Key Features:**
 - Gap detection: Wait for missing sequences or skip
-- Ordered delivery: Guarantees frame order across shards
+- Ordered delivery by producer-supplied `header.sequence`
 - Zero-copy: String views into internal buffers
 - Shard-aware: Handles multi-shard producers
+
+`header.sequence` is a transport sequence, not automatically a deterministic
+simulation order. If a producer assigns it with an atomic counter from
+multiple shard threads, the counter records that run's physical arbitration
+order. Deterministic cross-run replay requires a separate logical merge key
+such as virtual timestamp, scheduler sequence, stable agent index, and
+per-agent record index.
+
+Frames now carry that logical merge key directly as
+`(logical_tick, agent_order, intra_agent_index)`. Consumers that need
+cross-run determinism should merge by that causal key and use `sequence` only
+for gap detection or as a final same-key tie-breaker.
 
 ### Producer Package: Frame Builder
 
@@ -186,16 +201,21 @@ auto frame = builder.build(
     /*format=*/FrameFormat::Text
 );
 
-// Frame has auto-incremented global + per-shard sequences
-std::cout << "Global seq: " << frame.header.sequence << "\n";
+// Frame has auto-incremented transport + per-shard sequences
+std::cout << "Transport seq: " << frame.header.sequence << "\n";
 std::cout << "Shard seq: " << frame.header.shard_sequence << "\n";
 ```
 
 **Key Features:**
-- Auto-incrementing sequences (global + per-shard)
+- Auto-incrementing transport sequence and per-shard sequence
 - Stable agent ID hashing (FNV-1a)
 - Format enum mapping
 - Timestamp injection
+
+The transport sequence is unique and useful for tracing and gap detection.
+Under concurrent producers it should not be used as a canonical deterministic
+global order, because the next sequence holder is chosen by runtime thread
+scheduling.
 
 ---
 
@@ -325,13 +345,16 @@ Frames are fixed-layout, trivially copyable structures designed for shared-memor
 
 ```cpp
 struct LineFrameHeader {
-    uint64_t sequence;           // Global sequence counter
+    uint64_t sequence;           // Transport sequence counter
     uint64_t shard_sequence;     // Per-shard sequence counter
     uint64_t timestamp_unix_ns;  // Nanosecond Unix timestamp
+    uint64_t logical_tick;       // Deterministic causal tick
     uint64_t run_id;             // Correlate frames within a pipeline run
     uint64_t window_id;          // Batch/window grouping
     uint32_t payload_size;       // Bytes in payload (0 to max)
     uint32_t agent_id;           // FNV-1a hash of agent name
+    uint32_t agent_order;        // Stable scenario agent order
+    uint32_t intra_agent_index;  // Per-agent generation counter
     uint32_t shard_id;           // Shard affinity
     FrameFormat format;          // 20+ format types (JSON, Text, CLF, etc.)
     LineFrameFlags flags;        // Truncated, EndOfStream, WindowSeal
@@ -346,8 +369,19 @@ struct LineFrame {
 ```
 
 ABI version constants ensure compatibility:
-- `kIpcAbiVersion = 1`
-- `kSharedChannelAbiVersion = 1`
+- `kIpcAbiVersion = 2`
+- `kSharedChannelAbiVersion = 2`
+
+`sequence` and `shard_sequence` are transport metadata. Deterministic consumers
+should reconstruct canonical order with `(logical_tick, agent_order,
+intra_agent_index)`.
+
+`WindowSeal` and `EndOfStream` are completion barriers. In deterministic
+LogCraft runs, seals are emitted at scheduler-defined window/epoch boundaries,
+not continuously per frame. A `WindowSeal(window_id, logical_tick=T)` means the
+emitting shard will not produce additional data frames with `logical_tick < T`.
+Consumers may finalize a window only after every shard has sealed the boundary
+or ended.
 
 ### Backpressure Strategies
 

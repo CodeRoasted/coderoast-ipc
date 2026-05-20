@@ -19,13 +19,16 @@ using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
     return std::string{"coderoast_consumer_test_"} + suffix + "_" + std::to_string(::getpid());
 }
 
-[[nodiscard]] Frame make_frame(std::uint64_t sequence, std::uint32_t shard_id, const char* payload)
+[[nodiscard]] Frame make_frame(
+    std::uint64_t sequence, std::uint32_t shard_id, const char* payload,
+    coderoast::ipc::LineFrameFlags flags = coderoast::ipc::LineFrameFlags::kLineFrameFlagNone)
 {
     Frame frame{};
     frame.header.sequence = sequence;
     frame.header.shard_id = shard_id;
     frame.header.shard_sequence = 1;
     frame.header.payload_size = static_cast<std::uint32_t>(std::strlen(payload));
+    frame.header.flags = flags;
     std::memcpy(frame.payload.data(), payload, frame.header.payload_size);
     return frame;
 }
@@ -89,6 +92,56 @@ TEST(OrderedLineFrameIterator, ConsumesOrderedFrames)
     EXPECT_EQ(out.header.sequence, 2U);
 
     Channel::unlink(shard_name);
+}
+
+TEST(OrderedLineFrameIterator, TransportSequenceDrainsAheadOfMissingFrame)
+{
+    const auto base_name{unique_channel("transport_drain")};
+    const auto shard0_name{base_name + "_shard_0"};
+    const auto shard1_name{base_name + "_shard_1"};
+
+    auto producer0{
+        Channel::create(coderoast::ipc::ChannelConfig{.name = shard0_name, .slot_count = 8})};
+    auto producer1{
+        Channel::create(coderoast::ipc::ChannelConfig{.name = shard1_name, .slot_count = 8})};
+
+    coderoast::ipc::consumer::OrderedLineFrameIterator<> iterator{
+        typename coderoast::ipc::consumer::OrderedLineFrameIterator<>::Config{
+            .channel = base_name,
+            .shard_count = 2,
+            .first_sequence = 1,
+            .ordering = coderoast::ipc::consumer::FrameOrdering::TransportSequence,
+        }};
+
+    (void)producer1.push(make_frame(2, 1, "second"));
+
+    Frame out{};
+    EXPECT_FALSE(iterator.try_next(out));
+
+    const auto stats_after_gap{iterator.channel_stats()};
+    ASSERT_EQ(stats_after_gap.size(), 2U);
+    EXPECT_EQ(stats_after_gap[1].popped, 1U);
+
+    (void)producer0.push(make_frame(1, 0, "first"));
+
+    ASSERT_TRUE(iterator.try_next(out));
+    EXPECT_EQ(out.header.sequence, 1U);
+    ASSERT_TRUE(iterator.try_next(out));
+    EXPECT_EQ(out.header.sequence, 2U);
+
+    (void)producer0.push(make_frame(3, 0, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    (void)producer1.push(make_frame(4, 1, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+
+    ASSERT_TRUE(iterator.try_next(out));
+    EXPECT_TRUE(coderoast::ipc::has_flag(
+        out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    ASSERT_TRUE(iterator.try_next(out));
+    EXPECT_TRUE(coderoast::ipc::has_flag(
+        out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    EXPECT_TRUE(iterator.all_shards_done());
+
+    Channel::unlink(shard0_name);
+    Channel::unlink(shard1_name);
 }
 
 int main(int argc, char** argv)
