@@ -125,54 +125,51 @@ SharedMemoryChannel<DefaultLineFrame> receiver{
 - `BackpressurePolicy` - Block, DropNewest, OverwriteOldest
 - `WaitStrategy` - Spin, SpinYield, Adaptive, AdaptivePark, ParkOnly
 
-### Consumer Package: Ordered Frame Stream
+### Consumer Package: Causal Frame Stream
 
-Adapter for consuming frames by the `header.sequence` values supplied by the producer, with gap handling:
+The recommended consumer entry point is `CausalShmConsumer<Frame>` — a
+pull-based, threadless pipeline that drains every shard's SPSC ring on
+demand, k-way merges by `CausalKey`, and applies a control-frame filter:
 
 ```cpp
-#include "coderoast/ipc/consumer/shared_memory_source.hpp"
+#include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
 
 using namespace coderoast::ipc::consumer;
 
-// Create consumer over multiple shards
-SharedMemorySource<> source{SharedMemorySource<>::Config{
-    .channel = "myapp.pipeline",
-    .shard_count = 4,
-    .first_sequence = 1U,
-    .gap_policy     = coderoast::ipc::consumer::SequenceGapPolicy::WaitForMissing,
-    .ordering       = coderoast::ipc::consumer::FrameOrdering::CausalKey,
+CausalShmConsumer<> consumer{CausalShmConsumer<>::Config{
+    .channel        = "myapp.pipeline",
+    .shard_count    = 4,
     .backpressure   = coderoast::ipc::BackpressurePolicy::Block,
     .wait_strategy  = coderoast::ipc::WaitStrategy::Adaptive,
+    // emit_control_frames = false: WindowSeal/EOS absorbed by the drainer
 }};
 
-// Consume ordered frames
-std::string_view payload;
-while (source.try_pop(payload)) {
-    // payload is a zero-copy view into internal buffer
-    // valid until next try_pop() call
-    std::cout << "Frame: " << payload << "\n";
-    
-    if (payload == "END") break;
+coderoast::ipc::DefaultLineFrame frame{};
+while (!consumer.all_shards_done()) {
+    if (consumer.try_next(frame)) {
+        // frame.payload is valid until the next try_next() call
+    }
 }
 ```
 
-**Key Features:**
-- Gap detection: Wait for missing sequences or skip
-- Ordered delivery by producer-supplied `header.sequence`
-- Zero-copy: String views into internal buffers
-- Shard-aware: Handles multi-shard producers
+For callers that need per-window barriers — "tell me when window K has been
+sealed by every shard" — wrap the consumer in `WindowClosedConsumer<Frame>`
+(see the section below). The legacy `SharedMemorySource<Frame>` adapter
+(transport-sequence ordering, `try_pop(payload)` shape) still exists for
+backwards compatibility but new callers should prefer `CausalShmConsumer`.
 
-`header.sequence` is a transport sequence, not automatically a deterministic
-simulation order. If a producer assigns it with an atomic counter from
-multiple shard threads, the counter records that run's physical arbitration
-order. Deterministic cross-run replay requires a separate logical merge key
-such as virtual timestamp, scheduler sequence, stable agent index, and
-per-agent record index.
+**Key features:**
+- Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`
+- Deterministic byte-identical replay via `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)`
+- Zero-copy: frame payload is a view into the consumer's internal buffer, valid until the next `try_next()`
+- Shard-aware: handles multi-shard producers with frontier gating until every shard has produced or EOS'd
+- EOS is absorbed internally; `all_shards_done()` flips true once every shard has EOS'd and every heap is empty
 
-Frames now carry that logical merge key directly as
-`(logical_tick, agent_order, intra_agent_index)`. Consumers that need
-cross-run determinism should merge by that causal key and use `sequence` only
-for gap detection or as a final same-key tie-breaker.
+`header.sequence` remains a transport sequence, not a deterministic
+simulation order, and is used internally only for gap detection on a single
+shard. Deterministic cross-run replay relies on the logical merge key
+`(logical_tick, agent_order, intra_agent_index, shard_id)` carried in every
+frame header.
 
 ### Producer Package: Frame Builder
 
