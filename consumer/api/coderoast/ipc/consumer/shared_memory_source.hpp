@@ -50,7 +50,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
         SequenceGapPolicy gap_policy{SequenceGapPolicy::WaitForMissing};
         FrameOrdering ordering{FrameOrdering::CausalKey};
         coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
-        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
     };
 
     SharedMemorySource() = default;

@@ -105,7 +105,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         std::string channel{"coderoast.default"};
         std::size_t shard_count{1};
         coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
-        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
     };
 
     explicit ShmTransportDrainer(Config config) : config_{std::move(config)}
@@ -140,10 +140,16 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         return shards_.size();
     }
 
-    /// Non-blocking pop from shard `shard_id`'s SPSC SHM ring. Returns
-    /// `false` immediately if the ring is empty, the shard has already
-    /// observed EOS, or the popped frame WAS the EOS marker (in which
-    /// case the shard's `eos` flag is set as a side-effect).
+    /// Non-blocking pop from shard `shard_id`'s SPSC SHM ring.
+    ///
+    /// End-of-stream is now a *channel state*, not an in-band sentinel.
+    /// When the producer transitions the channel to Closing/Closed
+    /// (graceful) or Aborted (forced), `try_pop_status` returns
+    /// `PopStatus::Closed` / `PopStatus::Aborted` once the ring is
+    /// empty.  The drainer flips the per-shard `eos` flag exactly once
+    /// on that transition.
+    ///
+    /// Returns true iff a data/seal frame was popped.
     [[nodiscard]] bool try_pull(std::size_t shard_id, Frame& out)
     {
         auto& shard{*shards_[shard_id]};
@@ -152,31 +158,35 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         {
             return false;
         }
-        if (!channels_[shard_id].try_pop(out))
+        const auto status{channels_[shard_id].try_pop_status(out)};
+        if (status == coderoast::ipc::PopStatus::Ok)
         {
-            return false;
+            const bool is_seal{coderoast::ipc::has_flag(
+                out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
+            if (is_seal)
+            {
+                seals_observed_.fetch_add(1U, std::memory_order_relaxed);
+            }
+            else
+            {
+                shard.ever_had_data.store(true, std::memory_order_release);
+            }
+            pulls_succeeded_.fetch_add(1U, std::memory_order_relaxed);
+            return true;
         }
-        const bool is_eos{coderoast::ipc::has_flag(
-            out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream)};
-        if (is_eos)
+        if (status == coderoast::ipc::PopStatus::Closed ||
+            status == coderoast::ipc::PopStatus::Aborted)
         {
-            shard.eos.store(true, std::memory_order_release);
-            eos_observed_.fetch_add(1U, std::memory_order_relaxed);
-            notify(ConsumerEvent::kShardEos, shard_id);
-            return false;
+            // Producer has signalled end-of-stream out-of-band.  Flip
+            // the per-shard eos flag exactly once and notify observers.
+            bool expected{false};
+            if (shard.eos.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+            {
+                eos_observed_.fetch_add(1U, std::memory_order_relaxed);
+                notify(ConsumerEvent::kShardEos, shard_id);
+            }
         }
-        const bool is_seal{coderoast::ipc::has_flag(
-            out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
-        if (is_seal)
-        {
-            seals_observed_.fetch_add(1U, std::memory_order_relaxed);
-        }
-        else
-        {
-            shard.ever_had_data.store(true, std::memory_order_release);
-        }
-        pulls_succeeded_.fetch_add(1U, std::memory_order_relaxed);
-        return true;
+        return false;
     }
 
     [[nodiscard]] bool shard_eos(std::size_t shard_id) const noexcept

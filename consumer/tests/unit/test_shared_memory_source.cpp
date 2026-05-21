@@ -129,17 +129,14 @@ TEST(OrderedLineFrameIterator, TransportSequenceDrainsAheadOfMissingFrame)
     ASSERT_TRUE(iterator.try_next(out));
     EXPECT_EQ(out.header.sequence, 2U);
 
-    (void)producer0.push(
-        make_frame(3, 0, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
-    (void)producer1.push(
-        make_frame(4, 1, "", coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    // EOS is now a channel-state transition, not an in-band frame.
+    producer0.close_graceful();
+    producer1.close_graceful();
 
-    ASSERT_TRUE(iterator.try_next(out));
-    EXPECT_TRUE(coderoast::ipc::has_flag(
-        out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
-    ASSERT_TRUE(iterator.try_next(out));
-    EXPECT_TRUE(coderoast::ipc::has_flag(
-        out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream));
+    // One more try_next call lets the iterator observe PopStatus::Closed
+    // on both shards and flip their transport_eos_ flags.
+    Frame discarded{};
+    (void)iterator.try_next(discarded);
     EXPECT_TRUE(iterator.all_shards_done());
 
     Channel::unlink(shard0_name);

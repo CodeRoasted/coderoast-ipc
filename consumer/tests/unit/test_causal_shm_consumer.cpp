@@ -116,8 +116,7 @@ TEST(ShmTransportDrainer, AbsorbsEosFrameAndFlipsShardEos)
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 1}};
 
     (void)producers.producers[0].push(make_frame(1, 0, "data"));
-    (void)producers.producers[0].push(
-        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
 
     Frame out{};
     ASSERT_TRUE(drainer.try_pull(0, out));
@@ -200,8 +199,7 @@ TEST(CausalReorderBuffer, FrontierGatesOnceAllShardsProduced)
     EXPECT_FALSE(buffer.try_select(out));
 
     // EOS on shard 1 releases the gate; shard 0 frames flow in tick order.
-    (void)producers.producers[1].push(
-        make_frame(99, 1, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[1].close_graceful();
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "s0-a");
     ASSERT_TRUE(buffer.try_select(out));
@@ -216,11 +214,9 @@ TEST(CausalReorderBuffer, DrainedRequiresAllShardsEosAndEmptyHeaps)
 
     EXPECT_FALSE(buffer.drained());
 
-    (void)producers.producers[0].push(
-        make_frame(1, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
     (void)producers.producers[1].push(make_frame(1, 1, "x", /*tick=*/5));
-    (void)producers.producers[1].push(
-        make_frame(2, 1, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[1].close_graceful();
 
     // No refill has happened yet: drainer EOS flags are still unset.
     EXPECT_FALSE(buffer.drained());
@@ -247,16 +243,14 @@ TEST(CausalShmConsumer, EndToEndCausalOrderingAcrossShardsWithEos)
     (void)producers.producers[1].push(make_frame(2, 1, "t20", /*tick=*/20));
     (void)producers.producers[0].push(make_frame(3, 0, "t30", /*tick=*/30));
     (void)producers.producers[1].push(make_frame(4, 1, "t40", /*tick=*/40));
-    (void)producers.producers[0].push(
-        make_frame(5, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
-    (void)producers.producers[1].push(
-        make_frame(6, 1, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
+    producers.producers[1].close_graceful();
 
     Consumer consumer{Consumer::Config{
         .channel = producers.base,
         .shard_count = kShardCount,
         .backpressure = coderoast::ipc::BackpressurePolicy::Block,
-        .wait_strategy = coderoast::ipc::WaitStrategy::SpinYieldPark,
+        .wait_strategy = coderoast::ipc::WaitStrategy::Adaptive,
         .emit_control_frames = false,
     }};
 
@@ -289,8 +283,7 @@ TEST(CausalShmConsumer, ControlFramesAreFilteredByDefault)
     (void)producers.producers[0].push(
         make_frame(2, 0, "", /*tick=*/15, 0, 0, Flags::kLineFrameFlagWindowSeal));
     (void)producers.producers[0].push(make_frame(3, 0, "data2", /*tick=*/20));
-    (void)producers.producers[0].push(
-        make_frame(4, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
 
     Consumer consumer{Consumer::Config{
         .channel = producers.base,
@@ -328,8 +321,7 @@ TEST(DrainerMetrics, CountsPullsEosAndSeals)
     (void)producers.producers[0].push(make_frame(1, 0, "a"));
     (void)producers.producers[0].push(
         make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
-    (void)producers.producers[0].push(
-        make_frame(3, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
 
     Frame out{};
     EXPECT_TRUE(drainer.try_pull(0, out));  // data
@@ -360,10 +352,8 @@ TEST(DrainerObserver, FiresOnShardEosTransition)
             }
         });
 
-    (void)producers.producers[1].push(
-        make_frame(1, 1, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
-    (void)producers.producers[0].push(
-        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[1].close_graceful();
+    producers.producers[0].close_graceful();
 
     Frame out{};
     EXPECT_FALSE(drainer.try_pull(1, out));
@@ -418,8 +408,7 @@ TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
     ASSERT_TRUE(buffer.try_select(out));
 
     // EOS + empty heap → next try_select should fire kDrainComplete exactly once.
-    (void)producers.producers[0].push(
-        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
     EXPECT_FALSE(buffer.try_select(out));
     EXPECT_FALSE(buffer.try_select(out)); // idempotent
 
@@ -438,8 +427,7 @@ TEST(ConsumerMetrics, FacadeAggregatesAllStages)
     (void)producers.producers[0].push(
         make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
     (void)producers.producers[0].push(make_frame(3, 0, "beta"));
-    (void)producers.producers[0].push(
-        make_frame(4, 0, "", 0, 0, 0, Flags::kLineFrameFlagEndOfStream));
+    producers.producers[0].close_graceful();
 
     Frame out{};
     std::size_t emitted_count{0};

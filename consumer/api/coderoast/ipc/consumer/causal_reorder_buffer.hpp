@@ -30,6 +30,7 @@ template <typename Frame>
                                                         : frame.header.timestamp_unix_ns,
         .agent_order = frame.header.agent_order,
         .intra_agent_index = frame.header.intra_agent_index,
+        .shard_id = frame.header.shard_id,
     };
 }
 
@@ -50,7 +51,15 @@ template <typename Frame>
     {
         return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
     }
-    return lhs.header.sequence < rhs.header.sequence;
+    if (lhs.header.sequence != rhs.header.sequence)
+    {
+        return lhs.header.sequence < rhs.header.sequence;
+    }
+    // Final determinism tie-breaker: producer shard_id. Per-shard sequence
+    // numbers are independent counters and can collide across shards, so
+    // sequence alone is not globally deterministic. See CausalKey doc in
+    // ordered_line_frame_iterator.hpp for rationale.
+    return lhs_key.shard_id < rhs_key.shard_id;
 }
 
 /// **Step 2 of the pull-based causal SHM consumer pipeline.**

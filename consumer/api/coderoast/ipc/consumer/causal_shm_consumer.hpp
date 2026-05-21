@@ -68,7 +68,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalShmCons
         std::string channel{"coderoast.default"};
         std::size_t shard_count{1};
         coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
-        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
         bool emit_control_frames{false};
     };
 
