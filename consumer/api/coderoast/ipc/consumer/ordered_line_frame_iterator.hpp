@@ -33,6 +33,14 @@ struct CausalKey
     std::uint64_t logical_tick{0};
     std::uint32_t agent_order{0};
     std::uint32_t intra_agent_index{0};
+    // Final determinism tie-breaker: producer shard_id from the frame header.
+    // No extra wire bytes — shard_id is already populated by the producer
+    // (see shared_memory_producer.hpp::build). Including it here lifts the
+    // consumer contract from "deterministic multiset" to "deterministic byte
+    // sequence", so two replays of the same scenario emit byte-identical
+    // frame streams even when (logical_tick, agent_order, intra_agent_index)
+    // collide across shards.
+    std::uint32_t shard_id{0};
 };
 
 template <typename Frame = coderoast::ipc::DefaultLineFrame> struct OrderedLineFrameIteratorConfig
@@ -43,7 +51,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> struct OrderedLineF
     SequenceGapPolicy gap_policy{SequenceGapPolicy::WaitForMissing};
     FrameOrdering ordering{FrameOrdering::CausalKey};
     coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
-    coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+    coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
 };
 
 template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFrameIterator
@@ -201,7 +209,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                                              ? frame.header.logical_tick
                                              : frame.header.timestamp_unix_ns,
                          .agent_order = frame.header.agent_order,
-                         .intra_agent_index = frame.header.intra_agent_index};
+                         .intra_agent_index = frame.header.intra_agent_index,
+                         .shard_id = frame.header.shard_id};
     }
 
     [[nodiscard]] static bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
@@ -220,7 +229,14 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
         {
             return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
         }
-        return lhs.header.sequence < rhs.header.sequence;
+        if (lhs.header.sequence != rhs.header.sequence)
+        {
+            return lhs.header.sequence < rhs.header.sequence;
+        }
+        // Final tie-break: shard_id. Per-shard sequence numbers can collide
+        // across shards (each shard has its own counter), so sequence alone
+        // is not globally deterministic. shard_id is monotonic and unique.
+        return lhs_key.shard_id < rhs_key.shard_id;
     }
 
   private:
@@ -256,7 +272,11 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                 return lhs_key.agent_order > rhs_key.agent_order;
             if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
                 return lhs_key.intra_agent_index > rhs_key.intra_agent_index;
-            return lhs.header.sequence > rhs.header.sequence;
+            if (lhs.header.sequence != rhs.header.sequence)
+                return lhs.header.sequence > rhs.header.sequence;
+            // Final determinism tie-breaker: producer shard_id. See CausalKey
+            // doc-comment above for rationale.
+            return lhs.header.shard_id > rhs.header.shard_id;
         }
     };
 
@@ -283,19 +303,20 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                 continue;
             }
             Frame frame{};
-            while (channels_[shard_id].try_pop(frame))
+            for (;;)
             {
-                if (coderoast::ipc::has_flag(
-                        frame.header.flags,
-                        coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream))
+                const auto status{channels_[shard_id].try_pop_status(frame)};
+                if (status == coderoast::ipc::PopStatus::Ok)
+                {
+                    transport_buffer_.push(std::move(frame));
+                    continue;
+                }
+                if (status == coderoast::ipc::PopStatus::Closed ||
+                    status == coderoast::ipc::PopStatus::Aborted)
                 {
                     transport_eos_[shard_id] = true;
                 }
-                transport_buffer_.push(std::move(frame));
-                if (transport_eos_[shard_id])
-                {
-                    break;
-                }
+                break;
             }
         }
     }
@@ -313,7 +334,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
             next_sequence_ = transport_buffer_.top().header.sequence;
         }
 
-        while (!transport_buffer_.empty() && transport_buffer_.top().header.sequence < next_sequence_)
+        while (!transport_buffer_.empty() &&
+               transport_buffer_.top().header.sequence < next_sequence_)
         {
             transport_buffer_.pop();
         }
@@ -340,16 +362,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
         //      eventually blocks on SHM backpressure).  Determinism is
         //      preserved because consumers re-sort the captured frames by
         //      causal key after the stream completes.
-        const bool all_eos = !transport_eos_.empty() && [this]() noexcept {
-            for (const bool eos : transport_eos_)
-            {
-                if (!eos)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }();
+        const bool all_eos =
+            !transport_eos_.empty() && std::ranges::all_of(transport_eos_, std::identity{});
 
         if (available_sequence > next_sequence_ &&
             (config_.gap_policy == SequenceGapPolicy::SkipMissing || all_eos))
@@ -381,20 +395,25 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                 continue;
             }
             Frame frame{};
-            while (channels_[shard_id].try_pop(frame))
+            for (;;)
             {
-                if (coderoast::ipc::has_flag(
+                const auto status{channels_[shard_id].try_pop_status(frame)};
+                if (status == coderoast::ipc::PopStatus::Ok)
+                {
+                    const bool is_seal{coderoast::ipc::has_flag(
                         frame.header.flags,
-                        coderoast::ipc::LineFrameFlags::kLineFrameFlagEndOfStream))
+                        coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
+                    causal_state_[shard_id].buffer.push(std::move(frame));
+                    if (!is_seal)
+                        causal_state_[shard_id].ever_had_data = true;
+                    continue;
+                }
+                if (status == coderoast::ipc::PopStatus::Closed ||
+                    status == coderoast::ipc::PopStatus::Aborted)
                 {
                     causal_state_[shard_id].eos = true;
-                    break; // no more frames from this shard
                 }
-                const bool is_seal{coderoast::ipc::has_flag(
-                    frame.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
-                causal_state_[shard_id].buffer.push(std::move(frame));
-                if (!is_seal)
-                    causal_state_[shard_id].ever_had_data = true;
+                break;
             }
         }
     }
@@ -441,8 +460,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
                 continue;
             }
             if (best == kNoIndex ||
-                causal_less(causal_state_[shard_id].buffer.top(),
-                            causal_state_[best].buffer.top()))
+                causal_less(causal_state_[shard_id].buffer.top(), causal_state_[best].buffer.top()))
             {
                 best = shard_id;
             }

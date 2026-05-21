@@ -123,7 +123,7 @@ SharedMemoryChannel<DefaultLineFrame> receiver{
 - `DefaultLineFrame` - 4KB payload frames (customizable)
 - `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
 - `BackpressurePolicy` - Block, DropNewest, OverwriteOldest
-- `WaitStrategy` - SpinYieldPark, YieldPark, ParkOnly
+- `WaitStrategy` - Spin, SpinYield, Adaptive, AdaptivePark, ParkOnly
 
 ### Consumer Package: Ordered Frame Stream
 
@@ -142,7 +142,7 @@ SharedMemorySource<> source{SharedMemorySource<>::Config{
     .gap_policy     = coderoast::ipc::consumer::SequenceGapPolicy::WaitForMissing,
     .ordering       = coderoast::ipc::consumer::FrameOrdering::CausalKey,
     .backpressure   = coderoast::ipc::BackpressurePolicy::Block,
-    .wait_strategy  = coderoast::ipc::WaitStrategy::SpinYieldPark,
+    .wait_strategy  = coderoast::ipc::WaitStrategy::Adaptive,
 }};
 
 // Consume ordered frames
@@ -374,7 +374,10 @@ ABI version constants ensure compatibility:
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
 should reconstruct canonical order with `(logical_tick, agent_order,
-intra_agent_index)`.
+intra_agent_index, shard_id)`. The trailing `shard_id` is a tie-break for the
+otherwise unlikely case where two shards emit frames with identical
+`(logical_tick, agent_order, intra_agent_index)` — without it, the k-way merge
+would visit those frames in arrival order, which is non-deterministic.
 
 `WindowSeal` and `EndOfStream` are completion barriers. In deterministic
 LogCraft runs, seals are emitted at scheduler-defined window/epoch boundaries,
@@ -382,6 +385,26 @@ not continuously per frame. A `WindowSeal(window_id, logical_tick=T)` means the
 emitting shard will not produce additional data frames with `logical_tick < T`.
 Consumers may finalize a window only after every shard has sealed the boundary
 or ended.
+
+### `WindowClosedConsumer` — deterministic per-window barriers
+
+Raw `CausalShmConsumer` exposes one `WindowSeal` frame *per shard*, in the
+order they arrive at the merge frontier. That order is not strictly
+deterministic when several shards drain incrementally (the seal of whichever
+shard has buffered records first crosses the frontier first). For consumers
+that only need to know *when a window has been fully sealed by every shard*,
+`coderoast::ipc::consumer::WindowClosedConsumer<Frame>` wraps a
+`CausalShmConsumer` and:
+
+- forwards data frames unchanged,
+- absorbs the per-shard seal frames internally, and
+- emits exactly one `WindowClosed{window_id, logical_tick}` event after the
+  N-th shard has sealed that window.
+
+Pair `shm_window_seal_interval_seconds` on the producer side with the
+downstream window cadence (e.g. InSight's MetaLog `pyramid.window_ns`; the
+default `kWindowDuration` is 25 s in `coderoast-server`) so that one
+`WindowClosed` event corresponds to one consumer-side window close.
 
 ### Backpressure Strategies
 
@@ -391,9 +414,11 @@ or ended.
 
 ### Wait Strategies
 
-- **SpinYieldPark:** Spin briefly, yield, then park (low-latency)
-- **YieldPark:** Yield then park (balanced)
-- **ParkOnly:** Immediately park (battery-friendly)
+- **Spin:** Pure spin (lowest latency, highest CPU).
+- **SpinYield:** Spin then `std::this_thread::yield()` (balanced).
+- **Adaptive:** Spin, yield, then `std::this_thread::sleep_for(1us)` (default, low-latency).
+- **AdaptivePark:** Spin, yield, then futex park via `std::atomic::wait` (efficient).
+- **ParkOnly:** Immediately park (battery-friendly).
 
 ---
 

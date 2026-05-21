@@ -50,7 +50,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
         SequenceGapPolicy gap_policy{SequenceGapPolicy::WaitForMissing};
         FrameOrdering ordering{FrameOrdering::CausalKey};
         coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
-        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::SpinYieldPark};
+        coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
     };
 
     SharedMemorySource() = default;
@@ -90,8 +90,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
             {
                 continue;
             }
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
             out_payload =
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
                 std::string_view{reinterpret_cast<const char*>(current_frame_.payload.data()),
                                  current_frame_.header.payload_size};
             return true;
