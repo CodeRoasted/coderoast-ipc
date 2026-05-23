@@ -55,6 +55,11 @@ jobs:
           cache_packages: true
           profile_detect: false
 
+      - name: Setup Conan profile
+        run: |
+          mkdir -p "$CONAN_HOME/profiles"
+          cp linux-gcc13-release "$CONAN_HOME/profiles/$CONAN_PROFILE"
+
       - name: Verify recipe version matches tag
         run: |
           version="$(sed -nE "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"]/\1/p" conanfile.py | head -n1 || true)"
