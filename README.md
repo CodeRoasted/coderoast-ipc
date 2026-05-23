@@ -121,43 +121,55 @@ SharedMemoryChannel<DefaultLineFrame> receiver{
 **Key Types:**
 - `SharedMemoryChannel<Frame>` - SPSC queue template
 - `DefaultLineFrame` - 4KB payload frames (customizable)
-- `LineFrameHeader` - Sequence, timestamp, format, payload metadata
+- `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
 - `BackpressurePolicy` - Block, DropNewest, OverwriteOldest
-- `WaitStrategy` - SpinYieldPark, YieldPark, ParkOnly
+- `WaitStrategy` - Spin, SpinYield, Adaptive, AdaptivePark, ParkOnly
 
-### Consumer Package: Ordered Frame Stream
+### Consumer Package: Causal Frame Stream
 
-Adapter for consuming ordered frame sequences with gap handling:
+The recommended consumer entry point is `CausalShmConsumer<Frame>` — a
+pull-based, threadless pipeline that drains every shard's SPSC ring on
+demand, k-way merges by `CausalKey`, and applies a control-frame filter:
 
 ```cpp
-#include "coderoast/ipc/consumer/shared_memory_source.hpp"
+#include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
 
 using namespace coderoast::ipc::consumer;
 
-// Create consumer over multiple shards
-SharedMemorySource<> source{SharedMemorySource<>::Config{
-    .channel = "myapp.pipeline",
-    .shard_count = 4,
-    .first_sequence = 1,
-    .gap_policy = SequenceGapPolicy::WaitForMissing,
+CausalShmConsumer<> consumer{CausalShmConsumer<>::Config{
+    .channel        = "myapp.pipeline",
+    .shard_count    = 4,
+    .backpressure   = coderoast::ipc::BackpressurePolicy::Block,
+    .wait_strategy  = coderoast::ipc::WaitStrategy::Adaptive,
+    // emit_control_frames = false: WindowSeal/EOS absorbed by the drainer
 }};
 
-// Consume ordered frames
-std::string_view payload;
-while (source.try_pop(payload)) {
-    // payload is a zero-copy view into internal buffer
-    // valid until next try_pop() call
-    std::cout << "Frame: " << payload << "\n";
-    
-    if (payload == "END") break;
+coderoast::ipc::DefaultLineFrame frame{};
+while (!consumer.all_shards_done()) {
+    if (consumer.try_next(frame)) {
+        // frame.payload is valid until the next try_next() call
+    }
 }
 ```
 
-**Key Features:**
-- Gap detection: Wait for missing sequences or skip
-- Ordered delivery: Guarantees frame order across shards
-- Zero-copy: String views into internal buffers
-- Shard-aware: Handles multi-shard producers
+For callers that need per-window barriers — "tell me when window K has been
+sealed by every shard" — wrap the consumer in `WindowClosedConsumer<Frame>`
+(see the section below). The legacy `SharedMemorySource<Frame>` adapter
+(transport-sequence ordering, `try_pop(payload)` shape) still exists for
+backwards compatibility but new callers should prefer `CausalShmConsumer`.
+
+**Key features:**
+- Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`
+- Deterministic byte-identical replay via `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)`
+- Zero-copy: frame payload is a view into the consumer's internal buffer, valid until the next `try_next()`
+- Shard-aware: handles multi-shard producers with frontier gating until every shard has produced or EOS'd
+- EOS is absorbed internally; `all_shards_done()` flips true once every shard has EOS'd and every heap is empty
+
+`header.sequence` remains a transport sequence, not a deterministic
+simulation order, and is used internally only for gap detection on a single
+shard. Deterministic cross-run replay relies on the logical merge key
+`(logical_tick, agent_order, intra_agent_index, shard_id)` carried in every
+frame header.
 
 ### Producer Package: Frame Builder
 
@@ -186,16 +198,21 @@ auto frame = builder.build(
     /*format=*/FrameFormat::Text
 );
 
-// Frame has auto-incremented global + per-shard sequences
-std::cout << "Global seq: " << frame.header.sequence << "\n";
+// Frame has auto-incremented transport + per-shard sequences
+std::cout << "Transport seq: " << frame.header.sequence << "\n";
 std::cout << "Shard seq: " << frame.header.shard_sequence << "\n";
 ```
 
 **Key Features:**
-- Auto-incrementing sequences (global + per-shard)
+- Auto-incrementing transport sequence and per-shard sequence
 - Stable agent ID hashing (FNV-1a)
 - Format enum mapping
 - Timestamp injection
+
+The transport sequence is unique and useful for tracing and gap detection.
+Under concurrent producers it should not be used as a canonical deterministic
+global order, because the next sequence holder is chosen by runtime thread
+scheduling.
 
 ---
 
@@ -325,13 +342,16 @@ Frames are fixed-layout, trivially copyable structures designed for shared-memor
 
 ```cpp
 struct LineFrameHeader {
-    uint64_t sequence;           // Global sequence counter
+    uint64_t sequence;           // Transport sequence counter
     uint64_t shard_sequence;     // Per-shard sequence counter
     uint64_t timestamp_unix_ns;  // Nanosecond Unix timestamp
+    uint64_t logical_tick;       // Deterministic causal tick
     uint64_t run_id;             // Correlate frames within a pipeline run
     uint64_t window_id;          // Batch/window grouping
     uint32_t payload_size;       // Bytes in payload (0 to max)
     uint32_t agent_id;           // FNV-1a hash of agent name
+    uint32_t agent_order;        // Stable scenario agent order
+    uint32_t intra_agent_index;  // Per-agent generation counter
     uint32_t shard_id;           // Shard affinity
     FrameFormat format;          // 20+ format types (JSON, Text, CLF, etc.)
     LineFrameFlags flags;        // Truncated, EndOfStream, WindowSeal
@@ -346,8 +366,42 @@ struct LineFrame {
 ```
 
 ABI version constants ensure compatibility:
-- `kIpcAbiVersion = 1`
-- `kSharedChannelAbiVersion = 1`
+- `kIpcAbiVersion = 2`
+- `kSharedChannelAbiVersion = 2`
+
+`sequence` and `shard_sequence` are transport metadata. Deterministic consumers
+should reconstruct canonical order with `(logical_tick, agent_order,
+intra_agent_index, shard_id)`. The trailing `shard_id` is a tie-break for the
+otherwise unlikely case where two shards emit frames with identical
+`(logical_tick, agent_order, intra_agent_index)` — without it, the k-way merge
+would visit those frames in arrival order, which is non-deterministic.
+
+`WindowSeal` and `EndOfStream` are completion barriers. In deterministic
+LogCraft runs, seals are emitted at scheduler-defined window/epoch boundaries,
+not continuously per frame. A `WindowSeal(window_id, logical_tick=T)` means the
+emitting shard will not produce additional data frames with `logical_tick < T`.
+Consumers may finalize a window only after every shard has sealed the boundary
+or ended.
+
+### `WindowClosedConsumer` — deterministic per-window barriers
+
+Raw `CausalShmConsumer` exposes one `WindowSeal` frame *per shard*, in the
+order they arrive at the merge frontier. That order is not strictly
+deterministic when several shards drain incrementally (the seal of whichever
+shard has buffered records first crosses the frontier first). For consumers
+that only need to know *when a window has been fully sealed by every shard*,
+`coderoast::ipc::consumer::WindowClosedConsumer<Frame>` wraps a
+`CausalShmConsumer` and:
+
+- forwards data frames unchanged,
+- absorbs the per-shard seal frames internally, and
+- emits exactly one `WindowClosed{window_id, logical_tick}` event after the
+  N-th shard has sealed that window.
+
+Pair `shm_window_seal_interval_seconds` on the producer side with the
+downstream window cadence (e.g. InSight's MetaLog `pyramid.window_ns`; the
+default `kWindowDuration` is 25 s in `coderoast-server`) so that one
+`WindowClosed` event corresponds to one consumer-side window close.
 
 ### Backpressure Strategies
 
@@ -357,9 +411,11 @@ ABI version constants ensure compatibility:
 
 ### Wait Strategies
 
-- **SpinYieldPark:** Spin briefly, yield, then park (low-latency)
-- **YieldPark:** Yield then park (balanced)
-- **ParkOnly:** Immediately park (battery-friendly)
+- **Spin:** Pure spin (lowest latency, highest CPU).
+- **SpinYield:** Spin then `std::this_thread::yield()` (balanced).
+- **Adaptive:** Spin, yield, then `std::this_thread::sleep_for(1us)` (default, low-latency).
+- **AdaptivePark:** Spin, yield, then futex park via `std::atomic::wait` (efficient).
+- **ParkOnly:** Immediately park (battery-friendly).
 
 ---
 
