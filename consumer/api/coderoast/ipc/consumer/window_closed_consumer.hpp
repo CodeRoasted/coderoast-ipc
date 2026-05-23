@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -193,7 +192,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class WindowClosedC
   private:
     std::size_t shard_count_{1};
     Underlying underlying_;
-    std::unordered_map<std::uint64_t, std::size_t> seal_counts_{};
+    std::unordered_map<std::uint64_t, std::size_t> seal_counts_;
     std::uint64_t frames_emitted_{0};
     std::uint64_t windows_closed_{0};
     std::uint64_t seals_observed_{0};

@@ -36,9 +36,8 @@ using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
     static std::atomic<std::uint64_t> counter{0};
-    return std::string{"coderoast_ipc_shutdown_"} + suffix + "_" +
-           std::to_string(::getpid()) + "_" +
-           std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
+    return std::string{"coderoast_ipc_shutdown_"} + suffix + "_" + std::to_string(::getpid()) +
+           "_" + std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
 }
 
 [[nodiscard]] Frame make_frame(std::uint64_t sequence)
@@ -55,18 +54,16 @@ struct ScopedChannel
     Channel producer;
     Channel consumer;
 
-    explicit ScopedChannel(const char* suffix, std::size_t slot_count = 8U,
-                           coderoast::ipc::BackpressurePolicy backpressure =
-                               coderoast::ipc::BackpressurePolicy::Block,
-                           coderoast::ipc::WaitStrategy wait_strategy =
-                               coderoast::ipc::WaitStrategy::AdaptivePark)
-        : name{unique_channel(suffix)},
-          producer{Channel::create(coderoast::ipc::ChannelConfig{
-              .name = name,
-              .slot_count = slot_count,
-              .backpressure = backpressure,
-              .wait_strategy = wait_strategy,
-          })},
+    explicit ScopedChannel(
+        const char* suffix, std::size_t slot_count = 8U,
+        coderoast::ipc::BackpressurePolicy backpressure = coderoast::ipc::BackpressurePolicy::Block,
+        coderoast::ipc::WaitStrategy wait_strategy = coderoast::ipc::WaitStrategy::AdaptivePark)
+        : name{unique_channel(suffix)}, producer{Channel::create(coderoast::ipc::ChannelConfig{
+                                            .name = name,
+                                            .slot_count = slot_count,
+                                            .backpressure = backpressure,
+                                            .wait_strategy = wait_strategy,
+                                        })},
           consumer{Channel::open(name, backpressure, wait_strategy)}
     {
     }
@@ -164,8 +161,8 @@ TEST(ChannelShutdown, CloseAbortUnblocksBlockedPush)
     ASSERT_EQ(ch.producer.try_push_status(make_frame(3)), coderoast::ipc::PushStatus::Full);
 
     std::atomic<coderoast::ipc::PushStatus> push_result{coderoast::ipc::PushStatus::Ok};
-    std::thread producer_thread{
-        [&]() noexcept { push_result.store(ch.producer.push_status(make_frame(3))); }};
+    std::thread producer_thread{[&]() noexcept
+                                { push_result.store(ch.producer.push_status(make_frame(3))); }};
 
     // Give the producer a moment to park.
     std::this_thread::sleep_for(50ms);
@@ -203,10 +200,12 @@ TEST(ChannelShutdown, AdaptiveParkWakesOnAbort)
 
     std::atomic<bool> entered{false};
     std::atomic<coderoast::ipc::PushStatus> push_result{coderoast::ipc::PushStatus::Ok};
-    std::thread producer_thread{[&]() noexcept {
-        entered.store(true, std::memory_order_release);
-        push_result.store(ch.producer.push_status(make_frame(3)), std::memory_order_release);
-    }};
+    std::thread producer_thread{[&]() noexcept
+                                {
+                                    entered.store(true, std::memory_order_release);
+                                    push_result.store(ch.producer.push_status(make_frame(3)),
+                                                      std::memory_order_release);
+                                }};
 
     while (!entered.load(std::memory_order_acquire))
     {
@@ -307,10 +306,12 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
 
     std::atomic<bool> entered{false};
     std::atomic<coderoast::ipc::PushStatus> push_result{coderoast::ipc::PushStatus::Ok};
-    std::thread parked{[&]() noexcept {
-        entered.store(true, std::memory_order_release);
-        push_result.store(producer.push_status(make_frame(2)), std::memory_order_release);
-    }};
+    std::thread parked{[&]() noexcept
+                       {
+                           entered.store(true, std::memory_order_release);
+                           push_result.store(producer.push_status(make_frame(2)),
+                                             std::memory_order_release);
+                       }};
 
     while (!entered.load(std::memory_order_acquire))
     {

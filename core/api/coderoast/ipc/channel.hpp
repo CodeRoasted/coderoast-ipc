@@ -219,39 +219,34 @@ namespace detail
     /// Layout discipline: hot producer/consumer cursors are on their
     /// own cache lines; the state-machine fields share a separate line
     /// (touched only on close/abort, no false sharing with data path).
+    // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding) Explicit padding for false sharing
     struct SharedChannelHeader
     {
+        // --- identity ---
         std::uint64_t magic{kSharedChannelMagic};
         std::uint32_t abi_version{kSharedChannelAbiVersion};
         std::uint32_t header_size{sizeof(SharedChannelHeader)};
+
         std::uint64_t slot_count{0};
         std::uint64_t slot_size{0};
+
+        // --- atomic control plane (isolated cache lines) ---
+        alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
+        alignas(kCacheLineBytes) std::atomic<std::uint32_t> parker_count{0};
+
+        // --- cursors ---
         Cursor write_sequence{};
         Cursor read_sequence{};
+        Cursor closing_at{};
+        // --- stats (relaxed updates) ---
         Cursor dropped{};
         Cursor overwritten{};
         Cursor blocked_events{};
         Cursor wait_loops{};
 
-        // -- Shutdown / state-machine plane --------------------------------
-        // `state` is the channel's lifecycle state (ChannelState enum
-        // packed into a uint8 to keep the atomic small and lock-free
-        // on every supported arch).
+        // --- state machine ---
         alignas(kCacheLineBytes) std::atomic<std::uint8_t> state{
             static_cast<std::uint8_t>(ChannelState::Open)};
-        // `closing_at` is the write_sequence snapshot at the moment
-        // graceful close was requested.  Consumer reports `Closed`
-        // when its read_sequence reaches this value.
-        std::atomic<std::uint64_t> closing_at{0};
-
-        // -- Adaptive-park cooperative wake plane --------------------------
-        // Producers/consumers that park on the kernel side wait on
-        // `wake_epoch`.  Notifiers (state changes + progress when
-        // someone is parked) bump the counter and `notify_all`.
-        // `parker_count` is a hint that lets the hot fast-path skip
-        // the futex syscall when nobody is parked.
-        alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
-        std::atomic<std::uint32_t> parker_count{0};
     };
 
     static_assert(alignof(SharedChannelHeader) >= kCacheLineBytes);
@@ -512,8 +507,8 @@ template <typename Frame> class SharedMemorySpscChannel
     }
     [[nodiscard]] bool is_closed() const noexcept
     {
-        const auto s{state()};
-        return s == ChannelState::Closing || s == ChannelState::Closed;
+        const auto _state{state()};
+        return _state == ChannelState::Closing || _state == ChannelState::Closed;
     }
     [[nodiscard]] bool is_aborted() const noexcept
     {
@@ -525,7 +520,7 @@ template <typename Frame> class SharedMemorySpscChannel
     /// use it to detect "all data delivered" without an EOS frame.
     [[nodiscard]] std::uint64_t closing_at() const noexcept
     {
-        return header_ == nullptr ? 0U : header_->closing_at.load(std::memory_order_acquire);
+        return header_ == nullptr ? 0U : header_->closing_at.value.load(std::memory_order_acquire);
     }
 
     /// Producer-side: signal "no more data will be written".  Atomic,
@@ -546,8 +541,9 @@ template <typename Frame> class SharedMemorySpscChannel
                 expected, static_cast<std::uint8_t>(ChannelState::Closing),
                 std::memory_order_acq_rel, std::memory_order_acquire))
         {
-            header_->closing_at.store(header_->write_sequence.value.load(std::memory_order_acquire),
-                                      std::memory_order_release);
+            header_->closing_at.value.store(
+                header_->write_sequence.value.load(std::memory_order_acquire),
+                std::memory_order_release);
         }
         // Always notify: a producer may be blocked in push() under
         // Block policy; it must observe the state change and exit.
@@ -574,12 +570,12 @@ template <typename Frame> class SharedMemorySpscChannel
     /// Non-blocking write.  Returns Ok / Full / Closed / Aborted.
     [[nodiscard]] PushStatus try_push_status(const Frame& frame) noexcept
     {
-        const auto st{state()};
-        if (st == ChannelState::Aborted)
+        const auto _state{state()};
+        if (_state == ChannelState::Aborted)
         {
             return PushStatus::Aborted;
         }
-        if (st != ChannelState::Open)
+        if (_state != ChannelState::Open)
         {
             return PushStatus::Closed;
         }
@@ -602,12 +598,12 @@ template <typename Frame> class SharedMemorySpscChannel
         }
         if (policy_ == BackpressurePolicy::OverwriteOldest)
         {
-            const auto st{state()};
-            if (st == ChannelState::Aborted)
+            const auto _state{state()};
+            if (_state == ChannelState::Aborted)
             {
                 return PushStatus::Aborted;
             }
-            if (st != ChannelState::Open)
+            if (_state != ChannelState::Open)
             {
                 return PushStatus::Closed;
             }
@@ -621,12 +617,12 @@ template <typename Frame> class SharedMemorySpscChannel
         bool blocked{false};
         for (;;)
         {
-            const auto st{state()};
-            if (st == ChannelState::Aborted)
+            const auto _state{state()};
+            if (_state == ChannelState::Aborted)
             {
                 return PushStatus::Aborted;
             }
-            if (st != ChannelState::Open)
+            if (_state != ChannelState::Open)
             {
                 return PushStatus::Closed;
             }
@@ -661,19 +657,19 @@ template <typename Frame> class SharedMemorySpscChannel
             notify_progress();
             return PopStatus::Ok;
         }
-        const auto st{state()};
-        if (st == ChannelState::Aborted)
+        const auto _state{state()};
+        if (_state == ChannelState::Aborted)
         {
             return PopStatus::Aborted;
         }
-        if (st == ChannelState::Open)
+        if (_state == ChannelState::Open)
         {
             return PopStatus::Empty;
         }
         // Closing or Closed.  Re-confirm we have actually drained up to
         // closing_at; if the consumer reached the snapshot the stream is
         // terminally closed and we promote Closing -> Closed for clarity.
-        const auto closing_seq{header_->closing_at.load(std::memory_order_acquire)};
+        const auto closing_seq{header_->closing_at.value.load(std::memory_order_acquire)};
         if (read >= closing_seq)
         {
             std::uint8_t exp{static_cast<std::uint8_t>(ChannelState::Closing)};
@@ -857,6 +853,7 @@ template <typename Frame> class SharedMemorySpscChannel
         header_->wake_epoch.notify_all();
     }
 
+    // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
     void move_from(SharedMemorySpscChannel&& other) noexcept
     {
         name_ = std::move(other.name_);
