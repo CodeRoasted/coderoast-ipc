@@ -61,5 +61,3 @@ set(GTEST_LIB_DIR "{gtest_libs}")
         self.cpp_info.set_property("cmake_target_name", "coderoast::ipc::consumer")
         self.cpp_info.bindirs = []
         self.cpp_info.libdirs = []
-        self.cpp_info.bindirs = []
-        self.cpp_info.libdirs = []
