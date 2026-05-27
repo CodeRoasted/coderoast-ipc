@@ -3,6 +3,9 @@ from conan.tools.files import copy
 import os
 
 
+required_conan_version = ">=2.28"
+
+
 class CodeRoastIpcConan(ConanFile):
     """
     Meta-package for CodeRoast IPC: orchestrates building and packaging all three sub-packages.

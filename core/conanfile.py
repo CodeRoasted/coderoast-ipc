@@ -4,6 +4,9 @@ from conan.tools.files import copy, save
 import os
 
 
+required_conan_version = ">=2.28"
+
+
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
     version = "1.2.0"
@@ -19,7 +22,7 @@ class CodeRoastIpcCoreConan(ConanFile):
 
     def build_requirements(self):
         self.test_requires("gtest/1.17.0")
-        self.test_requires("benchmark/1.8.3")
+        self.test_requires("benchmark/1.9.5")
 
     def generate(self):
         tc = CMakeToolchain(self)

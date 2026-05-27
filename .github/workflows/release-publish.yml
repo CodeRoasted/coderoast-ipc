@@ -51,6 +51,7 @@ jobs:
       - name: Setup Conan
         uses: conan-io/setup-conan@v1
         with:
+          version: "2.28.1"
           home: ${{ env.CONAN_HOME }}
           cache_packages: true
           profile_detect: false

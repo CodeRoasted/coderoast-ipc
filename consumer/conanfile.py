@@ -4,6 +4,9 @@ from conan.tools.files import copy, save
 import os
 
 
+required_conan_version = ">=2.28"
+
+
 class CodeRoastIpcConsumerConan(ConanFile):
     name = "coderoast_ipc_consumer"
     version = "1.2.0"
