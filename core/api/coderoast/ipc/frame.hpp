@@ -36,6 +36,7 @@ enum class FrameFormat : std::uint16_t // NOLINT(performance-enum-size)
     IisW3c = 18,
     Ecs = 19,
     OtelJson = 20,
+    GitHubActions = 21,
 };
 
 // uint16_t is intentional: stable IPC ABI (paired with `flags` to
