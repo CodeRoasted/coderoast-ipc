@@ -72,8 +72,8 @@ template <typename Frame>
 /// **Threading model**
 ///   * Single owner thread: the same thread that calls `try_select`.
 ///   * Holds no internal threads. No mutex anywhere.
-///   * Reads the drainer's atomic flags via the public `shard_eos` /
-///     `shard_ever_had_data` accessors (acquire loads).
+///   * Reads the drainer's per-shard EOS flag via the public `shard_eos`
+///     accessor (acquire load).
 ///
 /// **Backpressure semantics**
 ///   * Pure pull. Never blocks. `try_select` returns false when the
@@ -89,7 +89,7 @@ template <typename Frame>
 ///   * Output is deterministic given identical drainer input. Ties are
 ///     broken by `(logical_tick, agent_order, intra_agent_index, sequence)`
 ///     in that order, which is a total order.
-///   * The frontier gate guarantees no late frame from a productive shard
+///   * The frontier gate guarantees no late frame from any non-EOS shard
 ///     can be "passed" by a later frame from another shard.
 ///
 /// **Frame lifetime / move semantics**
@@ -118,12 +118,20 @@ template <typename Frame>
 ///   * `set_observer()` registers a callback for `kFrontierBlock` and
 ///     `kDrainComplete` discrete events. Off the per-frame hot path.
 ///
-/// **Frontier rule:** before emitting any frame, every shard that has
-/// previously produced data and has not yet observed EOS must hold at
-/// least one candidate frame. This prevents emission of a higher-tick
-/// frame from shard A while a lower-tick frame from shard B is still
-/// in-flight. Shards that have never produced data (no agents hashed to
-/// them) are excluded from the frontier check.
+/// **Frontier rule (watermark gate):** the causally-earliest buffered
+/// candidate `best` (tick t) may be emitted only once no shard could still
+/// deliver a frame earlier than `best`. Each shard settles that in one of
+/// three ways: it is EOS, it holds a buffered candidate (so its earliest
+/// future frame is >= best), or its *watermark* — the highest tick it has
+/// produced — has already reached t. The watermark works because each shard
+/// emits a deterministic WindowSeal for *every* window, data-bearing or not,
+/// and a seal is a promise that nothing at or before its boundary tick
+/// remains on that shard. Only a non-EOS shard with an empty heap AND a
+/// watermark below t can still strand an earlier frame, so only that case
+/// blocks. Temporal progression is driven by seals, never by data volume;
+/// this is the only safe rule when a shard can be idle now and produce data
+/// later, and it lets the final same-tick seal batch drain at a PlayToTarget
+/// freeze where no EOS follows.
 ///
 /// **Separation of concerns:** this stage knows nothing about transport
 /// (SHM rings, EOS frames). It pulls *opaque* frames from a
@@ -153,6 +161,15 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
         {
             while (drainer_->try_pull(shard_id, frame))
             {
+                // Track the shard's watermark — the highest tick it has produced.
+                // Per-shard frames are causally non-decreasing, so this is the
+                // shard's last-pulled tick; it bounds the earliest frame the shard
+                // can still deliver, which the frontier gate relies on.
+                const auto tick{extract_causal_key(frame).logical_tick};
+                if (tick > shards_[shard_id].watermark_tick)
+                {
+                    shards_[shard_id].watermark_tick = tick;
+                }
                 shards_[shard_id].buffer.push(std::move(frame));
             }
         }
@@ -166,18 +183,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
         selects_attempted_.fetch_add(1U, std::memory_order_relaxed);
         refill();
 
-        // Frontier gate.
-        for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
-        {
-            if (drainer_->shard_ever_had_data(shard_id) && !drainer_->shard_eos(shard_id) &&
-                shards_[shard_id].buffer.empty())
-            {
-                frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
-                notify(ConsumerEvent::kFrontierBlock, shard_id);
-                return false;
-            }
-        }
-
+        // Pick the causally-earliest buffered candidate across all shard heads.
         std::size_t best{kNoIndex};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
@@ -193,7 +199,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
         }
         if (best == kNoIndex)
         {
-            // Every shard is EOS with empty heap → fully drained.
+            // Every heap is empty. If every shard is also EOS we are fully
+            // drained; otherwise we are simply waiting for the next frame.
             if (!drain_complete_notified_ && drained())
             {
                 drain_complete_notified_ = true;
@@ -201,6 +208,29 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
             }
             return false;
         }
+
+        // Watermark frontier gate. `best` may be emitted only once no other shard
+        // could still deliver a causally-earlier frame. A shard settles that in one
+        // of three ways: it is EOS (no more frames at all), it holds a buffered
+        // candidate (its earliest future frame is therefore >= best), or its
+        // watermark — the highest tick it has produced — has already reached best's
+        // tick, since every WindowSeal promises nothing at or before its boundary
+        // tick remains on that shard. Only a non-EOS shard with an empty heap AND a
+        // watermark below best's tick can still strand an earlier frame, so only
+        // that case blocks. This is what lets the final batch of same-tick window
+        // seals drain at a PlayToTarget freeze, where no EOS ever follows.
+        const auto best_tick{extract_causal_key(shards_[best].buffer.top()).logical_tick};
+        for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
+        {
+            if (!drainer_->shard_eos(shard_id) && shards_[shard_id].buffer.empty() &&
+                shards_[shard_id].watermark_tick < best_tick)
+            {
+                frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
+                notify(ConsumerEvent::kFrontierBlock, shard_id);
+                return false;
+            }
+        }
+
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         out = std::move(const_cast<Frame&>(shards_[best].buffer.top()));
         shards_[best].buffer.pop();
@@ -229,7 +259,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
 
     struct ShardSummary
     {
-        bool ever_had_data{false};
         bool eos{false};
         std::size_t buf_size{0};
     };
@@ -241,7 +270,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
             out.push_back(ShardSummary{
-                .ever_had_data = drainer_->shard_ever_had_data(shard_id),
                 .eos = drainer_->shard_eos(shard_id),
                 .buf_size = shards_[shard_id].buffer.size(),
             });
@@ -286,6 +314,10 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
     struct ShardState
     {
         std::priority_queue<Frame, std::vector<Frame>, Greater> buffer{};
+        // Highest tick pulled from this shard so far. A shard's future frames are
+        // causally >= this, so it bounds the earliest frame the shard can still
+        // deliver — the basis of the watermark frontier gate in try_select().
+        std::uint64_t watermark_tick{0};
     };
 
     static constexpr std::size_t kNoIndex{std::numeric_limits<std::size_t>::max()};

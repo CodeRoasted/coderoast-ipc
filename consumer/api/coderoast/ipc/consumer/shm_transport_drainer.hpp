@@ -91,8 +91,8 @@ namespace coderoast::ipc::consumer
 ///     ring is empty *or* the shard has already observed EOS.
 ///   * EOS frames are NOT returned to the caller. They flip the per-shard
 ///     `eos` flag and `try_pull` returns `false`.
-///   * Window-seal frames ARE returned (they carry watermark information
-///     downstream stages may want) but they do not set `ever_had_data`.
+///   * Window-seal frames ARE returned. They carry the per-window
+///     watermark the reorder buffer's seal-driven frontier gates on.
 ///   * No causal-ordering / watermark logic lives here — that is step 2's
 ///     responsibility. This stage only knows about SHM transport state.
 template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
@@ -161,15 +161,10 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         const auto status{channels_[shard_id].try_pop_status(out)};
         if (status == coderoast::ipc::PopStatus::Ok)
         {
-            const bool is_seal{coderoast::ipc::has_flag(
-                out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal)};
-            if (is_seal)
+            if (coderoast::ipc::has_flag(
+                    out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal))
             {
                 seals_observed_.fetch_add(1U, std::memory_order_relaxed);
-            }
-            else
-            {
-                shard.ever_had_data.store(true, std::memory_order_release);
             }
             pulls_succeeded_.fetch_add(1U, std::memory_order_relaxed);
             return true;
@@ -192,11 +187,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     [[nodiscard]] bool shard_eos(std::size_t shard_id) const noexcept
     {
         return shards_[shard_id]->eos.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] bool shard_ever_had_data(std::size_t shard_id) const noexcept
-    {
-        return shards_[shard_id]->ever_had_data.load(std::memory_order_acquire);
     }
 
     /// True once every shard has observed EOS. The reorder buffer must
@@ -271,7 +261,6 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
     struct Shard
     {
         std::atomic<bool> eos{false};
-        std::atomic<bool> ever_had_data{false};
     };
 
     Config config_{};
