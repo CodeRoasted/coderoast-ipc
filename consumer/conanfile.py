@@ -6,13 +6,13 @@ import os
 
 class CodeRoastIpcConsumerConan(ConanFile):
     name = "coderoast_ipc_consumer"
-    version = "1.1.0"
+    version = "1.2.0"
     package_type = "header-library"
     license = "Apache-2.0"
     description = "Ordered stream consumer adapter for coderoast-ipc (fan-in from sharded channels, sequence gap handling)."
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "api/*", "tests/*"
-    requires = "coderoast_ipc_core/1.1.0"
+    requires = "coderoast_ipc_core/1.2.0"
 
     def layout(self):
         self.cpp.source.includedirs = ["api"]
