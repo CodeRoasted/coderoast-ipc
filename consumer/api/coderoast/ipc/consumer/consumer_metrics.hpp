@@ -22,8 +22,8 @@ struct DrainerMetrics
     std::uint64_t pulls_succeeded{0};
     /// Number of EOS frames absorbed by the drainer (never surfaced).
     std::uint64_t eos_observed{0};
-    /// Number of window-seal frames observed (surfaced; do not flip
-    /// `ever_had_data`).
+    /// Number of window-seal frames observed (surfaced to the caller; the
+    /// reorder buffer's seal-driven frontier gates on them).
     std::uint64_t seals_observed{0};
 };
 
@@ -36,8 +36,9 @@ struct ReorderMetrics
     std::uint64_t selects_attempted{0};
     /// Number of successful selections (a frame was popped).
     std::uint64_t selects_succeeded{0};
-    /// Number of selections blocked by the frontier gate (a previously
-    /// productive shard had an empty heap and no EOS).
+    /// Number of selections blocked by the watermark frontier gate (a non-EOS
+    /// shard had an empty heap and a watermark below the candidate's tick, so it
+    /// could still deliver a causally-earlier frame).
     std::uint64_t frontier_blocks{0};
 };
 
