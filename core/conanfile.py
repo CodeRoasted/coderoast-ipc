@@ -9,7 +9,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
-    version = "1.2.0"
+    version = "1.2.1"
     package_type = "header-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
