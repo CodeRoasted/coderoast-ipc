@@ -71,3 +71,8 @@ core/bench_results/**
 .DS_Store
 .directory
 **/.qmlls.ini
+
+# never commit deploy secrets
+.env
+*.env
+docker/.env
