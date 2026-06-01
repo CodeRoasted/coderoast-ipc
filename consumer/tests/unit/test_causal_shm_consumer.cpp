@@ -256,9 +256,8 @@ TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
     // goes idle — no data after, no eos.
     for (std::uint32_t shard{0}; shard < kShards; ++shard)
     {
-        (void)producers.producers[shard].push(
-            make_frame(shard + 1U, shard, "", /*tick=*/kSealTick, 0, 0,
-                       Flags::kLineFrameFlagWindowSeal));
+        (void)producers.producers[shard].push(make_frame(shard + 1U, shard, "", /*tick=*/kSealTick,
+                                                         0, 0, Flags::kLineFrameFlagWindowSeal));
     }
 
     std::vector<std::uint32_t> drained_shards;
