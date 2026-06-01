@@ -4,7 +4,27 @@ Shared-memory IPC primitives for CodeRoast pipelines: high-performance SPSC chan
 
 **Status:** Header-only C++23 library. No runtime dependencies. Suitable for embedding in any log pipeline.
 
-**Current package baseline:** `coderoast_ipc_core/1.2.1`, `coderoast_ipc_consumer/1.2.1`, and `coderoast_ipc_producer/1.2.1`. Cross-repo compatibility is tracked in [../technical_docs/compatibility_matrix.md](../technical_docs/compatibility_matrix.md), and planning lives in [../technical_docs/ROADMAP.md](../technical_docs/ROADMAP.md).
+**Current package baseline:** `coderoast_ipc_core/1.4.0`, `coderoast_ipc_consumer/1.4.0`, and `coderoast_ipc_producer/1.4.0`.
+
+---
+
+## Determinism
+
+`coderoast-ipc` exists to make a sharded, shared-memory pipeline **deterministically replayable**: the same logical inputs produce a **bit-identical consumed stream**, run after run, independent of thread scheduling or host. That property is what makes any pipeline built on it reproducibly testable — and it is a deliberate guarantee, not an accident of timing.
+
+The honest subtlety: a multi-shard shared-memory transport is *physically* racy, and we don't hide that. Determinism is restored at one precise, narrow boundary — the consumer's causal merge — and the contract draws a bright line on either side of it.
+
+**Raw transport — deliberately non-deterministic. Never assert on these:**
+- `header.sequence`, the global transport counter — the OS scheduler picks the next slot winner.
+- The order in which frames from different shards *arrive* at the consumer, before the merge.
+- The order in which per-shard `WindowSeal` frames physically land.
+
+**Consumed stream — bit-identical. Rely on these:**
+- The causal merge reorders every frame by `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)` behind a frontier/watermark gate, so the same inputs yield the same consumed order, always.
+- Per-window frame membership and the data-before-seal ordering within each window are reconciled and reproducible.
+- `WindowClosedConsumer` collapses the per-shard seals into exactly one `WindowClosed` event per window, so the **set and count of closed windows are fixed** for a given replay — never a function of transport timing.
+
+The racy interleave is **quarantined to the raw transport and never observed by application code**; everything the causal merge reconciles is a guarantee you can build on. Restoring determinism across that concurrent boundary *is* the point of this library.
 
 ---
 
@@ -277,16 +297,16 @@ This makes packages available to:
 
 ### GitHub Release Workflow
 
-Tags use `v1.2.1` semver format. GitHub Actions automatically:
+Tags use `v1.4.0` semver format. GitHub Actions automatically:
 
 1. Verify `conanfile.py` version matches tag
 2. Build all three packages
-3. Export Conan cache tarball (`coderoast_ipc-1.2.1.tgz`)
+3. Export Conan cache tarball (`coderoast_ipc-1.4.0.tgz`)
 4. Attach tarball to GitHub release
 
 Consumers restore with:
 ```bash
-conan cache restore coderoast_ipc-1.2.1.tgz
+conan cache restore coderoast_ipc-1.4.0.tgz
 ```
 
 ---
