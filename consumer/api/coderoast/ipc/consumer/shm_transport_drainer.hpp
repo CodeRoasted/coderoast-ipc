@@ -161,8 +161,8 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
         const auto status{channels_[shard_id].try_pop_status(out)};
         if (status == coderoast::ipc::PopStatus::Ok)
         {
-            if (coderoast::ipc::has_flag(
-                    out.header.flags, coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal))
+            if (coderoast::ipc::has_flag(out.header.flags,
+                                         coderoast::ipc::LineFrameFlags::kLineFrameFlagWindowSeal))
             {
                 seals_observed_.fetch_add(1U, std::memory_order_relaxed);
             }
