@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CONAN_HOME: ${{ github.workspace }}/.conan2
-      CONAN_PROFILE: linux-gcc13-release
+      CONAN_PROFILE: linux-gcc15-release
 
     steps:
       - name: Resolve tag
@@ -46,7 +46,7 @@ jobs:
       - name: Setup environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3-pip build-essential
+          sudo apt-get install -y cmake ninja-build python3-pip build-essential g++-15
 
       - name: Setup Conan
         uses: conan-io/setup-conan@v1
@@ -59,7 +59,7 @@ jobs:
       - name: Setup Conan profile
         run: |
           mkdir -p "$CONAN_HOME/profiles"
-          cp linux-gcc13-release "$CONAN_HOME/profiles/$CONAN_PROFILE"
+          cp linux-gcc15-release "$CONAN_HOME/profiles/$CONAN_PROFILE"
 
       - name: Verify recipe version matches tag
         run: |
