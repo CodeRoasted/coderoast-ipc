@@ -20,7 +20,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # Sift dogfood: post/update the sticky comment (same-repo, private repo — no forks)
+  pull-requests: write   # Sift dogfood: comment on same-repo PRs + seed on push; fork PRs skipped (read-only token anyway)
   actions: write         # Sift dogfood: upload the baseline-log artifact (+ read for last-green resolution)
 
 jobs:
@@ -120,7 +120,7 @@ jobs:
           ctest --test-dir producer/build_test --output-on-failure
 
       - name: Sift — structural diff of this run's build+test log (advisory)
-        if: ${{ always() }}
+        if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
         continue-on-error: true    # advisory: a Sift error must NEVER fail this build
         uses: CodeRoasted/sift-action@v1
         with:
