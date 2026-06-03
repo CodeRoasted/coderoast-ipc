@@ -76,3 +76,7 @@ core/bench_results/**
 .env
 *.env
 docker/.env
+
+# Environment files (secrets)
+.env.local
+.env.*.local

@@ -4,7 +4,7 @@ Shared-memory IPC primitives for CodeRoast pipelines: high-performance SPSC chan
 
 **Status:** Header-only C++23 library. No runtime dependencies. Suitable for embedding in any log pipeline.
 
-**Current package baseline:** `coderoast_ipc_core/1.4.1`, `coderoast_ipc_consumer/1.4.1`, and `coderoast_ipc_producer/1.4.1`.
+**Current package baseline:** `coderoast_ipc_core/1.4.2`, `coderoast_ipc_consumer/1.4.2`, and `coderoast_ipc_producer/1.4.2`.
 
 ---
 
@@ -297,16 +297,16 @@ This makes packages available to:
 
 ### GitHub Release Workflow
 
-Tags use `v1.4.1` semver format. GitHub Actions automatically:
+Tags use `v1.4.2` semver format. GitHub Actions automatically:
 
 1. Verify `conanfile.py` version matches tag
 2. Build all three packages
-3. Export Conan cache tarball (`coderoast_ipc-1.4.1.tgz`)
+3. Export Conan cache tarball (`coderoast_ipc-1.4.2.tgz`)
 4. Attach tarball to GitHub release
 
 Consumers restore with:
 ```bash
-conan cache restore coderoast_ipc-1.4.1.tgz
+conan cache restore coderoast_ipc-1.4.2.tgz
 ```
 
 ---
