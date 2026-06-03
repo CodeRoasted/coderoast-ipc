@@ -16,16 +16,16 @@ class CodeRoastIpcConan(ConanFile):
       3. Triggers separate builds of coderoast_ipc_core, coderoast_ipc_consumer, coderoast_ipc_producer
 
     Downstream consumers should depend on the specific packages they need:
-      - requires = "coderoast_ipc_core/1.4.2"       # Just transport layer
-      - requires = "coderoast_ipc_consumer/1.4.2"   # Consumer adapter + core
-      - requires = "coderoast_ipc_producer/1.4.2"   # Producer helper + core
+      - requires = "coderoast_ipc_core/1.4.3"       # Just transport layer
+      - requires = "coderoast_ipc_consumer/1.4.3"   # Consumer adapter + core
+      - requires = "coderoast_ipc_producer/1.4.3"   # Producer helper + core
 
     This meta-package (coderoast_ipc) is only used internally by CI/release workflows
     to coordinate multi-package builds. Downstream packages should use the specific sub-packages.
     """
 
     name = "coderoast_ipc"
-    version = "1.4.2"
+    version = "1.4.3"
     package_type = "header-library"
     license = "Apache-2.0"
     description = (
