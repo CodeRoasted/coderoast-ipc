@@ -19,7 +19,7 @@ on:
       - 'packages.yml'
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write   # Sift dogfood: comment on same-repo PRs + seed on push; fork PRs skipped (read-only token anyway)
   actions: write         # Sift dogfood: upload the baseline-log artifact (+ read for last-green resolution)
 
@@ -126,4 +126,5 @@ jobs:
         with:
           log: build.log
           fail-on: none
+          commit-comment: regression
           build-status: ${{ job.status == 'success' && 'green' || 'red' }}
