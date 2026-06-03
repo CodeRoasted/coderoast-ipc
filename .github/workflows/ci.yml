@@ -20,7 +20,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write   # Sift dogfood: post/update the sticky comment (same-repo, private repo — no forks)
+  actions: write         # Sift dogfood: upload the baseline-log artifact (+ read for last-green resolution)
 
 jobs:
   build:
@@ -50,8 +51,12 @@ jobs:
           mkdir -p "$CONAN_HOME/profiles"
           cp linux-gcc13-release "$CONAN_HOME/profiles/$CONAN_PROFILE"
 
+      - name: Start build-log capture (the conan-module steps below append; Sift diffs it)
+        run: truncate --size 0 "$GITHUB_WORKSPACE/build.log"
+
       - name: Build root meta-package
         run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
           conan create . \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
@@ -59,6 +64,7 @@ jobs:
 
       - name: Build and test core package
         run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
           conan create core \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
@@ -77,6 +83,7 @@ jobs:
 
       - name: Build and test consumer package
         run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
           conan create consumer \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
@@ -95,6 +102,7 @@ jobs:
 
       - name: Build and test producer package
         run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
           conan create producer \
             --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
             --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
@@ -110,3 +118,12 @@ jobs:
             -DCODEROAST_IPC_PRODUCER_BUILD_TESTS=ON
           cmake --build producer/build_test
           ctest --test-dir producer/build_test --output-on-failure
+
+      - name: Sift — structural diff of this run's build+test log (advisory)
+        if: ${{ always() }}
+        continue-on-error: true    # advisory: a Sift error must NEVER fail this build
+        uses: CodeRoasted/sift-action@v1
+        with:
+          log: build.log
+          fail-on: none
+          build-status: ${{ job.status == 'success' && 'green' || 'red' }}
