@@ -1,6 +1,6 @@
 from conan import ConanFile
-from conan.tools.cmake import CMakeToolchain
-from conan.tools.files import copy, save
+from conan.tools.cmake import CMake, CMakeToolchain
+from conan.tools.files import save
 import os
 
 
@@ -10,7 +10,9 @@ required_conan_version = ">=2.28"
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
     version = "1.5.0"
-    package_type = "header-library"
+    # Was header-library; the §8.1 module wrapper (coderoast.ipc.core) adds one
+    # compiled .cppm.o → static-library. The api/ surface is still header-only.
+    package_type = "static-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
     settings = "os", "arch", "compiler", "build_type"
@@ -19,6 +21,11 @@ class CodeRoastIpcCoreConan(ConanFile):
 
     def layout(self):
         self.cpp.source.includedirs = ["api"]
+        build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR", "build")
+        self.cpp.build.libdirs = [build_dir]
+        # Editable: the build-tree export()'d coderoast_ipc_core-config.cmake (carrying the
+        # FILE_SET CXX_MODULES) lives in the build dir → consumers find it there (§10.9).
+        self.cpp.build.builddirs = [build_dir]
 
     def build_requirements(self):
         self.test_requires("gtest/1.17.0")
@@ -56,16 +63,28 @@ class CodeRoastIpcCoreConan(ConanFile):
                     save(self, os.path.join(self.generators_folder, "benchmark_paths.cmake"), paths_content)
 
     def build(self):
-        # Header-only library - nothing to build
-        pass
+        # The module wrapper (coderoast.ipc.core) is a compiled .cppm.o + its build-tree
+        # export()'d config — configure+build emits both (the api/ surface is header-only).
+        cmake = CMake(self)
+        cmake.configure()
+        cmake.build()
 
     def package(self):
-        # Copy headers to package
-        copy(self, "*.hpp", src=self.source_folder + "/api",
-             dst=self.package_folder + "/include", keep_path=True)
+        # install(DIRECTORY api/) ships the headers; install(EXPORT) + the -config.cmake
+        # ship the module file set (§10.7). The CMakeLists is the single source of truth.
+        cmake = CMake(self)
+        cmake.install()
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "coderoast_ipc_core")
         self.cpp_info.set_property("cmake_target_name", "coderoast::ipc::core")
         self.cpp_info.bindirs = []
-        self.cpp_info.libdirs = []
+        # Cross-package C++ modules (§10.7): defer to the package's OWN cmake config
+        # (it carries FILE_SET CXX_MODULES; conan's generator does not emit it).
+        # List the editable build-tree config dir AND the create install path; the
+        # absent one is a harmless prefix entry. core is std-only → no find_dependency.
+        self.cpp_info.set_property("cmake_find_mode", "none")
+        self.cpp_info.builddirs = [
+            os.environ.get("MALF_EDITABLE_BUILD_DIR", "build"),
+            "lib/cmake/coderoast_ipc_core",
+        ]

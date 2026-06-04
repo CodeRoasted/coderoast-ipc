@@ -18,7 +18,11 @@ file(GLOB_RECURSE API_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/api
 #  Header-only library target
 ###########################################################
 add_library(coderoast_ipc_core INTERFACE ${API_HEADERS})
-set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME ipc_core)
+# EXPORT_NAME = core (not ipc_core): with NAMESPACE coderoast::ipc:: the exported
+# target is coderoast::ipc::core, matching what consumers reference. Under
+# cmake_find_mode=none the NATIVE export name is the consumed one (§10.12) — it
+# must equal the alias, else find_package yields a target nobody links.
+set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME core)
 add_library(coderoast::ipc::core ALIAS coderoast_ipc_core)
 
 target_include_directories(coderoast_ipc_core
@@ -28,18 +32,56 @@ target_include_directories(coderoast_ipc_core
 )
 
 ###########################################################
+#  Named-module wrapper (coderoast.ipc.core) — §8.1 (1.5.0)
+###########################################################
+# The library is INTERFACE (header-only), so the module wrapper is the package's
+# ONLY compiled artifact — a minimal .cppm.o that re-exports the global-module
+# public surface (frame/channel/SPSC). cxx_std_23 PUBLIC is the §10.4 producer
+# gotcha (else "no C++ standard found"); link the lib PUBLIC for the api/ includes.
+add_library(coderoast_ipc_core_module STATIC)
+target_sources(coderoast_ipc_core_module
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/modules/coderoast_ipc_core.cppm
+)
+target_link_libraries(coderoast_ipc_core_module PUBLIC coderoast_ipc_core)
+target_compile_features(coderoast_ipc_core_module PUBLIC cxx_std_23)
+add_library(coderoast::ipc::core_module ALIAS coderoast_ipc_core_module)
+
+###########################################################
 #  Install rules (used by `conan create`)
 ###########################################################
 include(GNUInstallDirs)
-install(TARGETS coderoast_ipc_core
+# Library + module wrapper in ONE export set → a single file-set owner
+# (§10.5/§10.8 diamond ODR-safety). Only the module target carries cxx_modules.
+install(TARGETS coderoast_ipc_core coderoast_ipc_core_module
     EXPORT coderoast_ipc_coreTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILE_SET cxx_modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/coderoast_ipc_core_modules
 )
 install(DIRECTORY api/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT coderoast_ipc_coreTargets
     NAMESPACE coderoast::ipc::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core
 )
+
+###########################################################
+#  Cross-package module shipping (Argos — §10.7/§10.9)
+###########################################################
+# CMakeConfigDeps does not yet emit FILE_SET CXX_MODULES (§10.6) → ship the
+# package's OWN cmake config (carrying the file set), conan defers via
+# cmake_find_mode=none. create → install(EXPORT); editable → BUILD-TREE export().
+# core is header-only/std-only → the config has NO find_dependency() lines.
+export(EXPORT coderoast_ipc_coreTargets
+    NAMESPACE coderoast::ipc::
+    FILE ${CMAKE_CURRENT_BINARY_DIR}/coderoast_ipc_coreTargets.cmake)
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/coderoast_ipc_core-config.cmake
+"include(\"\${CMAKE_CURRENT_LIST_DIR}/coderoast_ipc_coreTargets.cmake\")
+")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/coderoast_ipc_core-config.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core)
 
 ###########################################################
 #  Tests (only when building the root project)
