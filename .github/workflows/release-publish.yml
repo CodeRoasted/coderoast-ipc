@@ -46,7 +46,7 @@ jobs:
       - name: Setup environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3-pip build-essential g++-15
+          sudo apt-get install -y software-properties-common && sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test && sudo apt-get update && sudo apt-get install -y cmake ninja-build python3-pip build-essential gcc-15 g++-15
 
       - name: Setup Conan
         uses: conan-io/setup-conan@v1
