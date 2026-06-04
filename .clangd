@@ -1,13 +1,13 @@
 CompileFlags:
   CompilationDatabase: build
   # Pin clangd to the same toolchain the project actually builds with
-  # (Debian gcc-13 + libstdc++). Without this clangd defaults to its own
+  # (gcc-15 + libstdc++). Without this clangd defaults to its own
   # bundled clang which may pick up libc++ headers, causing ABI-mismatch
   # false positives in fmt's consteval format-string checker (see the
   # SPDLOG_LOGGER_* squiggles previously reported).
   Add:
     - -stdlib=libstdc++
-    - --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13
+    - --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/15
 
 ---
 

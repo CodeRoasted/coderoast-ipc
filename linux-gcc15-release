@@ -1,10 +1,10 @@
-# linux-gcc15-release — the gcc-15 ship/CI toolchain (migrating from gcc-13).
-# Flags MIRROR linux-clang21-release (and the outgoing linux-gcc13-release) EXACTLY so the
+# linux-gcc15-release — the gcc-15 ship/CI toolchain (replaces gcc-13).
+# Flags MIRROR linux-clang21-release EXACTLY so the
 # determinism gate proves gcc-15 ≡ clang-21 bit-identity (det_math is integer / no-libm /
 # -ffp-contract-invariant by design, so the serialized document MUST match across both).
 # Auto-keys to the 'gcc15-release' conan cache + build-gcc15-release/ tree via _malf_profile_key
 # (the linux-* arm), so it never contaminates the clang-21 unkeyed base while both coexist.
-# Requires g++-15 (Ubuntu 24.04 universe: `apt-get install -y gcc-15 g++-15`; no PPA needed).
+# Requires g++-15 via the ubuntu-toolchain-r/test PPA (PPA-only on Noble 24.04).
 [settings]
 arch=x86_64
 build_type=Release
