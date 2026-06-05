@@ -1,9 +1,19 @@
+# clang-tidy is our lexical/style gate; the dynamic sanitizers (ASan/UBSan/TSan) are
+# the memory/UB/threading oracle. Two families are therefore OFF in Checks below, placed
+# in the enabling run — NOT under a folded-scalar '#' comment: a trailing inline comment
+# folds into and silently eats the next token, so a commented disable is a no-op.
+#   -clang-analyzer-*           path-sensitive static analyzer (ON by default): redundant
+#                               with the sanitizers, and its notes trace THROUGH third-party
+#                               headers (asio/.conan2, libc++) un-filterably, drowning signal.
+#   -readability-magic-numbers  twin of the disabled -cppcoreguidelines-avoid-magic-numbers.
 Checks: >
   bugprone-*,
   performance-*,
   modernize-*,
   readability-*,
   cppcoreguidelines-*,
+  -clang-analyzer-*,
+  -readability-magic-numbers,
 
   # Disabled noisy / conflicting
   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
