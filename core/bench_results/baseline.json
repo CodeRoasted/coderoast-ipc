@@ -1,6 +1,6 @@
 {
   "context": {
-    "date": "2026-06-02T23:43:05+02:00",
+    "date": "2026-06-05T07:52:32+02:00",
     "host_name": "DESKTOP-F7PPTO6",
     "executable": "/home/windows/workspace/coderoast/coderoast-ipc/build/core/coderoast_ipc_core_bench",
     "num_cpus": 8,
@@ -33,8 +33,8 @@
         "num_sharing": 8
       }
     ],
-    "load_avg": [3.604,2.06592,1.09082],
-    "library_version": "v1.9.5",
+    "load_avg": [0.541016,0.411621,0.365234],
+    "library_version": "v1.4.3-8-gdb4a26b1-dirty",
     "library_build_type": "release",
     "json_schema_version": 1
   },
@@ -48,9 +48,9 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 18229275,
-      "real_time": 4.1005459404162821e+01,
-      "cpu_time": 3.8793935962894857e+01,
+      "iterations": 43569166,
+      "real_time": 1.6010072535723456e+01,
+      "cpu_time": 1.5766658374869971e+01,
       "time_unit": "ns",
       "slots": 1.0240000000000000e+03
     },
@@ -63,9 +63,9 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 18035636,
-      "real_time": 4.0892418874829239e+01,
-      "cpu_time": 3.8687358128097060e+01,
+      "iterations": 42316107,
+      "real_time": 1.6789413259759495e+01,
+      "cpu_time": 1.6534521051286688e+01,
       "time_unit": "ns",
       "slots": 8.1920000000000000e+03
     },
@@ -78,9 +78,9 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 17566582,
-      "real_time": 4.1869855274821880e+01,
-      "cpu_time": 3.9611405451555676e+01,
+      "iterations": 43273829,
+      "real_time": 1.6863021319223453e+01,
+      "cpu_time": 1.6608822390087088e+01,
       "time_unit": "ns",
       "slots": 6.5536000000000000e+04
     }
