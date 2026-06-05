@@ -130,6 +130,22 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
             
             # Register tests
             add_test(NAME coderoast_ipc_core_tests COMMAND coderoast_ipc_core_tests)
+
+            # Module-import proof (§8.1 / cxx_modules_migration_contract §10.15):
+            # a standalone TU that `import coderoast.ipc.core;` and exercises the
+            # re-exported header-only frame/channel surface. Links the MODULE target
+            # so CMake scans the .cppm + builds the BMI — the runnable proof the
+            # wrapper is soundly importable, both toolchains. (Links bare libgtest.a
+            # like the unit tests, so the TU provides its own main().)
+            add_executable(coderoast_ipc_core_module_test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/module/test_ipc_core_module_import.cpp")
+            target_include_directories(coderoast_ipc_core_module_test PRIVATE "${GTEST_INCLUDE_DIR}")
+            target_link_libraries(coderoast_ipc_core_module_test PRIVATE
+                coderoast_ipc_core_module
+                "${GTEST_LIB_DIR}/libgtest.a"
+                pthread
+            )
+            add_test(NAME coderoast_ipc_core_module_test COMMAND coderoast_ipc_core_module_test)
         else()
             message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
         endif()
