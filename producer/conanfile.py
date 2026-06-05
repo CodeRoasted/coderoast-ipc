@@ -16,7 +16,7 @@ class CodeRoastIpcProducerConan(ConanFile):
     license = "Apache-2.0"
     description = "Producer-side helpers for coderoast-ipc (frame building, sequence tracking, shard distribution)."
     settings = "os", "arch", "compiler", "build_type"
-    exports_sources = "CMakeLists.txt", "api/*", "tests/*"
+    exports_sources = "CMakeLists.txt", "modules/*", "api/*", "tests/*"
     requires = "coderoast_ipc_core/1.5.0"
 
     def layout(self):

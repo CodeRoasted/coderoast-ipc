@@ -17,7 +17,7 @@ class CodeRoastIpcCoreConan(ConanFile):
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
     settings = "os", "arch", "compiler", "build_type"
 
-    exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
+    exports_sources = "CMakeLists.txt", "modules/*", "api/*", "tests/*", "benchmarks/*"
 
     def layout(self):
         self.cpp.source.includedirs = ["api"]
