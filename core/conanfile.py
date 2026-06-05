@@ -9,7 +9,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
-    version = "1.5.0"
+    version = "1.5.1"
     # Was header-library; the §8.1 module wrapper (coderoast.ipc.core) adds one
     # compiled .cppm.o → static-library. The api/ surface is still header-only.
     package_type = "static-library"

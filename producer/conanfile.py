@@ -9,7 +9,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcProducerConan(ConanFile):
     name = "coderoast_ipc_producer"
-    version = "1.5.0"
+    version = "1.5.1"
     # §8.1 module wrapper (coderoast.ipc.producer) adds one compiled .cppm.o →
     # static-library. The api/ surface is still header-only.
     package_type = "static-library"
@@ -17,7 +17,7 @@ class CodeRoastIpcProducerConan(ConanFile):
     description = "Producer-side helpers for coderoast-ipc (frame building, sequence tracking, shard distribution)."
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "modules/*", "api/*", "tests/*"
-    requires = "coderoast_ipc_core/1.5.0"
+    requires = "coderoast_ipc_core/1.5.1"
 
     def layout(self):
         self.cpp.source.includedirs = ["api"]
