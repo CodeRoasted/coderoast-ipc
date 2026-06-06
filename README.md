@@ -2,7 +2,7 @@
 
 Shared-memory IPC primitives for CodeRoast pipelines: high-performance SPSC channels, frame types, and producer/consumer adapters.
 
-**Status:** Header-only C++23 library. No runtime dependencies. Suitable for embedding in any log pipeline.
+**Status:** C++23 named-module library (`coderoast.ipc.core` / `.producer` / `.consumer`). No third-party runtime dependencies. Suitable for embedding in any log pipeline.
 
 ---
 
@@ -30,13 +30,13 @@ The racy interleave is **quarantined to the raw transport and never observed by 
 
 `coderoast-ipc` provides three distinct packages (all versioned together):
 
-| Package | Purpose | Dependencies | Use When |
-|---------|---------|--------------|----------|
-| **coderoast_ipc_core** | SPSC channels, frame types, ABI constants | None | You need low-level transport primitives |
-| **coderoast_ipc_consumer** | Adapter for consuming ordered frames | `coderoast_ipc_core` | You're building a frame consumer/sink |
-| **coderoast_ipc_producer** | Helper for building and sequencing frames | `coderoast_ipc_core` | You're building a frame producer/source |
+| Package | Module | Purpose | Dependencies | Use When |
+|---------|--------|---------|--------------|----------|
+| **coderoast_ipc_core** | `coderoast.ipc.core` | SPSC channels, frame types, ABI constants | None | You need low-level transport primitives |
+| **coderoast_ipc_consumer** | `coderoast.ipc.consumer` | Adapter for consuming ordered frames | `coderoast_ipc_core` | You're building a frame consumer/sink |
+| **coderoast_ipc_producer** | `coderoast.ipc.producer` | Helper for building and sequencing frames | `coderoast_ipc_core` | You're building a frame producer/source |
 
-All packages are header-only: no compilation, instant build times, zero runtime overhead.
+Each package ships as a **pure C++ named module** — consumers `import` it; there are no textual headers to `#include`. The interface compiles once into a small static library (the former header-only surface now lives in the module interface, plus one impl unit for the syscall wrappers); downstream builds consume the prebuilt BMI and `.a`.
 
 ---
 
@@ -95,8 +95,7 @@ conan create producer \
 Shared-memory single-producer-single-consumer queue:
 
 ```cpp
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/frame.hpp"
+import coderoast.ipc.core;
 
 using namespace coderoast::ipc;
 
@@ -150,7 +149,8 @@ pull-based, threadless pipeline that drains every shard's SPSC ring on
 demand, k-way merges by `CausalKey`, and applies a control-frame filter:
 
 ```cpp
-#include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
+import coderoast.ipc.core;      // frame/channel types, BackpressurePolicy, WaitStrategy
+import coderoast.ipc.consumer;
 
 using namespace coderoast::ipc::consumer;
 
@@ -194,7 +194,8 @@ frame header.
 Helper for constructing and sequencing frames:
 
 ```cpp
-#include "coderoast/ipc/producer/shared_memory_producer.hpp"
+import coderoast.ipc.core;      // FrameFormat and the frame header types
+import coderoast.ipc.producer;
 
 using namespace coderoast::ipc::producer;
 
@@ -264,13 +265,15 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 # Lint (clang-tidy, excludes .conan2 and build/)
-clang-tidy-18 -p build core/**/*.cpp core/**/*.hpp \
+clang-tidy -p build core/**/*.{cppm,cpp} \
   --header-filter="^(?!.*\.conan2|.*build).*$" \
   --config-file=.clang-tidy
 
 # Format (clang-format)
-clang-format-18 -i core/**/*.{cpp,hpp} consumer/**/*.{cpp,hpp} producer/**/*.{cpp,hpp}
+clang-format -i core/**/*.{cppm,cpp} consumer/**/*.{cppm,cpp} producer/**/*.{cppm,cpp}
 ```
+
+In the workspace, `malf lint coderoast-ipc` runs the same checks under the pinned toolchain.
 
 ---
 
@@ -295,16 +298,16 @@ This makes packages available to:
 
 ### GitHub Release Workflow
 
-Tags use `v1.4.2` semver format. GitHub Actions automatically:
+Tags use `vX.Y.Z` semver format. GitHub Actions automatically:
 
 1. Verify `conanfile.py` version matches tag
 2. Build all three packages
-3. Export Conan cache tarball (`coderoast_ipc-1.4.2.tgz`)
+3. Export Conan cache tarball (`coderoast_ipc-X.Y.Z.tgz`)
 4. Attach tarball to GitHub release
 
 Consumers restore with:
 ```bash
-conan cache restore coderoast_ipc-1.4.2.tgz
+conan cache restore coderoast_ipc-X.Y.Z.tgz
 ```
 
 ---
@@ -312,11 +315,11 @@ conan cache restore coderoast_ipc-1.4.2.tgz
 ## Requirements
 
 - **OS:** Linux (macOS/Windows support possible with POSIX shim)
-- **C++ Standard:** C++23 (compilers: GCC 15, Clang 21)
-- **Build System:** CMake 3.28+ with Ninja
+- **C++ Standard:** C++23 with modules + `import std` (compilers: GCC 15 / libstdc++, Clang 21 / libc++)
+- **Build System:** CMake with `CMakeConfigDeps` + Ninja (a recent CMake with C++20-module + `import std` support)
 - **Package Manager:** Conan 2.x
-- **Runtime Dependencies:** None (header-only)
-- **Test Dependencies:** GTest 1.17.0 (test-only), Google Benchmark 1.8.3 (benchmark-only)
+- **Runtime Dependencies:** None (small static library, no third-party runtime deps)
+- **Test Dependencies:** GTest (test-only), Google Benchmark (benchmark-only)
 
 ---
 
