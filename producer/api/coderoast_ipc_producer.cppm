@@ -92,4 +92,4 @@ template <typename Frame = DefaultLineFrame> class FrameBuilder
     std::vector<std::uint64_t> shard_sequences_;
 };
 
-}  // namespace coderoast::ipc::producer
+} // namespace coderoast::ipc::producer

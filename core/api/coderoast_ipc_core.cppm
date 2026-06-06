@@ -1,13 +1,16 @@
-// coderoast.ipc.core — PURE named module (1.5.1 unwrap of the §8.1 wrapper). Header-only: the former
-// api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via `import std`.
+// coderoast.ipc.core — PURE named module (1.5.1 unwrap of the §8.1 wrapper). Header-only: the
+// former api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via
+// `import std`.
 //
 // §11.9 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*, PROT_*,
-// MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so a textual
-// GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So every syscall
-// + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import std);
-// this interface holds only the non-template `detail::shm_*` declarations, crossing the boundary with
-// primitives only (int/size_t/void*/const char*) — no std class type unifies across import-std↔textual.
-// detail is a SEALED non-export namespace (§11.9): consumers get the public surface, not the helpers.
+// MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so a
+// textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
+// every syscall
+// + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import
+// std); this interface holds only the non-template `detail::shm_*` declarations, crossing the
+// boundary with primitives only (int/size_t/void*/const char*) — no std class type unifies across
+// import-std↔textual. detail is a SEALED non-export namespace (§11.9): consumers get the public
+// surface, not the helpers.
 export module coderoast.ipc.core;
 import std;
 
@@ -105,8 +108,6 @@ using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
 static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
 static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
 
-
-
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
 inline constexpr std::uint32_t kSharedChannelAbiVersion{3U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
@@ -181,198 +182,202 @@ struct ChannelStats
 } // namespace coderoast::ipc
 
 // ── Internal helpers (SEALED, non-export) — uses the public data above ───────
+
+namespace
+{
+
+[[nodiscard]] inline std::size_t align_up(std::size_t value, std::size_t alignment) noexcept
+{
+    return ((value + alignment - 1U) / alignment) * alignment;
+}
+
+[[nodiscard]] inline std::string normalise_channel_name(std::string_view name)
+{
+    if (name.empty())
+    {
+        throw std::invalid_argument("IPC channel name must not be empty");
+    }
+    std::string out{name};
+    if (out.front() != '/')
+    {
+        out.insert(out.begin(), '/');
+    }
+    std::ranges::replace(out, '.', '_');
+    return out;
+}
+
+inline void cpu_pause() noexcept
+{
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elifdef __aarch64__
+    asm volatile("yield" ::: "memory");
+#else
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
+}
+
+} // namespace
 namespace coderoast::ipc::detail
 {
 
-    inline constexpr std::size_t kCacheLineBytes{64U};
+inline constexpr std::size_t kCacheLineBytes{64U};
 
-    // ── POSIX shm syscall wrappers — DEFINED in coderoast_ipc_core_impl.cpp ──────
-    // Each owns one syscall + its C macros (errno, O_*, PROT_*, MAP_*) which cannot
-    // live in this import-std interface (§11.9 cascade rule, see file header). The
-    // boundary crosses primitives only; the throwing ones raise std::runtime_error
-    // built inside the impl unit. fd helpers return a VALID descriptor or throw.
-    [[nodiscard]] int shm_open_create(const char* name);
-    [[nodiscard]] int shm_open_existing(const char* name);
-    void shm_truncate(int descriptor, std::size_t size);
-    [[nodiscard]] std::size_t shm_fstat_size(int descriptor);
-    [[nodiscard]] void* shm_map(int descriptor, std::size_t size);
-    void shm_unmap(void* address, std::size_t size) noexcept;
-    void close_descriptor(int descriptor) noexcept;
-    void shm_unlink_name(const char* name) noexcept;
+// ── POSIX shm syscall wrappers — DEFINED in coderoast_ipc_core_impl.cpp ──────
+// Each owns one syscall + its C macros (errno, O_*, PROT_*, MAP_*) which cannot
+// live in this import-std interface (§11.9 cascade rule, see file header). The
+// boundary crosses primitives only; the throwing ones raise std::runtime_error
+// built inside the impl unit. fd helpers return a VALID descriptor or throw.
+[[nodiscard]] int shm_open_create(const char* name);
+[[nodiscard]] int shm_open_existing(const char* name);
+void shm_truncate(int descriptor, std::size_t size);
+[[nodiscard]] std::size_t shm_fstat_size(int descriptor);
+[[nodiscard]] void* shm_map(int descriptor, std::size_t size);
+void shm_unmap(void* address, std::size_t size) noexcept;
+void close_descriptor(int descriptor) noexcept;
+void shm_unlink_name(const char* name) noexcept;
 
-    [[nodiscard]] inline std::size_t align_up(std::size_t value, std::size_t alignment) noexcept
-    {
-        return ((value + alignment - 1U) / alignment) * alignment;
-    }
+struct alignas(kCacheLineBytes) Cursor
+{
+    std::atomic<std::uint64_t> value{0};
+};
 
-    [[nodiscard]] inline std::string normalise_channel_name(std::string_view name)
-    {
-        if (name.empty())
-        {
-            throw std::invalid_argument("IPC channel name must not be empty");
-        }
-        std::string out{name};
-        if (out.front() != '/')
-        {
-            out.insert(out.begin(), '/');
-        }
-        std::ranges::replace(out, '.', '_');
-        return out;
-    }
+/// Shared-memory header layout.  Lives at the start of the SHM
+/// mapping; both endpoints see the same atomics.
+///
+/// Layout discipline: hot producer/consumer cursors are on their
+/// own cache lines; the state-machine fields share a separate line
+/// (touched only on close/abort, no false sharing with data path).
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding) Explicit padding for false sharing
+struct SharedChannelHeader
+{
+    // --- identity ---
+    std::uint64_t magic{kSharedChannelMagic};
+    std::uint32_t abi_version{kSharedChannelAbiVersion};
+    std::uint32_t header_size{sizeof(SharedChannelHeader)};
 
-    inline void cpu_pause() noexcept
-    {
-#if defined(__x86_64__) || defined(__i386__)
-        __builtin_ia32_pause();
-#elifdef __aarch64__
-        asm volatile("yield" ::: "memory");
-#else
-        std::atomic_signal_fence(std::memory_order_seq_cst);
-#endif
-    }
+    std::uint64_t slot_count{0};
+    std::uint64_t slot_size{0};
 
-    struct alignas(kCacheLineBytes) Cursor
-    {
-        std::atomic<std::uint64_t> value{0};
-    };
+    // --- atomic control plane (isolated cache lines) ---
+    alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
+    alignas(kCacheLineBytes) std::atomic<std::uint32_t> parker_count{0};
 
-    /// Shared-memory header layout.  Lives at the start of the SHM
-    /// mapping; both endpoints see the same atomics.
+    // --- cursors ---
+    Cursor write_sequence{};
+    Cursor read_sequence{};
+    Cursor closing_at{};
+    // --- stats (relaxed updates) ---
+    Cursor dropped{};
+    Cursor overwritten{};
+    Cursor blocked_events{};
+    Cursor wait_loops{};
+
+    // --- state machine ---
+    alignas(kCacheLineBytes) std::atomic<std::uint8_t> state{
+        static_cast<std::uint8_t>(ChannelState::Open)};
+};
+
+static_assert(alignof(SharedChannelHeader) >= kCacheLineBytes);
+
+/// Adaptive busy-wait helper.  See the WaitStrategy documentation
+/// at the top of the file for the per-strategy progression.
+class AdaptiveWait
+{
+  public:
+    explicit AdaptiveWait(WaitStrategy strategy) noexcept : strategy_{strategy} {}
+
+    /// Perform one wait iteration.
     ///
-    /// Layout discipline: hot producer/consumer cursors are on their
-    /// own cache lines; the state-machine fields share a separate line
-    /// (touched only on close/abort, no false sharing with data path).
-    // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding) Explicit padding for false sharing
-    struct SharedChannelHeader
+    /// `header` may be `nullptr`; when non-null and the strategy is
+    /// `AdaptivePark`, the late stages of the wait park on the
+    /// header's `wake_epoch` atomic.  Notifiers (push/pop/state
+    /// transition) bump `wake_epoch` to release parked threads.
+    void wait(SharedChannelHeader* header) noexcept
     {
-        // --- identity ---
-        std::uint64_t magic{kSharedChannelMagic};
-        std::uint32_t abi_version{kSharedChannelAbiVersion};
-        std::uint32_t header_size{sizeof(SharedChannelHeader)};
-
-        std::uint64_t slot_count{0};
-        std::uint64_t slot_size{0};
-
-        // --- atomic control plane (isolated cache lines) ---
-        alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
-        alignas(kCacheLineBytes) std::atomic<std::uint32_t> parker_count{0};
-
-        // --- cursors ---
-        Cursor write_sequence{};
-        Cursor read_sequence{};
-        Cursor closing_at{};
-        // --- stats (relaxed updates) ---
-        Cursor dropped{};
-        Cursor overwritten{};
-        Cursor blocked_events{};
-        Cursor wait_loops{};
-
-        // --- state machine ---
-        alignas(kCacheLineBytes) std::atomic<std::uint8_t> state{
-            static_cast<std::uint8_t>(ChannelState::Open)};
-    };
-
-    static_assert(alignof(SharedChannelHeader) >= kCacheLineBytes);
-
-    /// Adaptive busy-wait helper.  See the WaitStrategy documentation
-    /// at the top of the file for the per-strategy progression.
-    class AdaptiveWait
-    {
-      public:
-        explicit AdaptiveWait(WaitStrategy strategy) noexcept : strategy_{strategy} {}
-
-        /// Perform one wait iteration.
-        ///
-        /// `header` may be `nullptr`; when non-null and the strategy is
-        /// `AdaptivePark`, the late stages of the wait park on the
-        /// header's `wake_epoch` atomic.  Notifiers (push/pop/state
-        /// transition) bump `wake_epoch` to release parked threads.
-        void wait(SharedChannelHeader* header) noexcept
+        ++loops_;
+        switch (strategy_)
         {
-            ++loops_;
-            switch (strategy_)
+        case WaitStrategy::Spin:
+            cpu_pause();
+            return;
+        case WaitStrategy::SpinYield:
+            if (loops_ < kSpinLoops)
             {
-            case WaitStrategy::Spin:
+                cpu_pause();
+            }
+            else
+            {
+                std::this_thread::yield();
+            }
+            return;
+        case WaitStrategy::Adaptive:
+            if (loops_ < kSpinLoops)
+            {
                 cpu_pause();
                 return;
-            case WaitStrategy::SpinYield:
-                if (loops_ < kSpinLoops)
-                {
-                    cpu_pause();
-                }
-                else
-                {
-                    std::this_thread::yield();
-                }
-                return;
-            case WaitStrategy::Adaptive:
-                if (loops_ < kSpinLoops)
-                {
-                    cpu_pause();
-                    return;
-                }
-                if (loops_ < kYieldLoops)
-                {
-                    std::this_thread::yield();
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds{1});
-                return;
-            case WaitStrategy::AdaptivePark:
-                if (loops_ < kSpinLoops)
-                {
-                    cpu_pause();
-                    return;
-                }
-                if (loops_ < kYieldLoops)
-                {
-                    std::this_thread::yield();
-                    return;
-                }
-                if (header != nullptr)
-                {
-                    // Kernel-park on the wake_epoch.  Bump parker_count
-                    // around the wait so the notifier side knows to
-                    // actually wake us up.  Spurious wakeups are fine:
-                    // the surrounding loop re-checks the condition.
-                    header->parker_count.fetch_add(1, std::memory_order_acq_rel);
-                    const auto epoch{header->wake_epoch.load(std::memory_order_acquire)};
-                    header->wake_epoch.wait(epoch, std::memory_order_acquire);
-                    header->parker_count.fetch_sub(1, std::memory_order_acq_rel);
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds{1});
-                return;
-            case WaitStrategy::ParkOnly:
-                std::this_thread::sleep_for(std::chrono::microseconds{1});
+            }
+            if (loops_ < kYieldLoops)
+            {
+                std::this_thread::yield();
                 return;
             }
+            std::this_thread::sleep_for(std::chrono::microseconds{1});
+            return;
+        case WaitStrategy::AdaptivePark:
+            if (loops_ < kSpinLoops)
+            {
+                cpu_pause();
+                return;
+            }
+            if (loops_ < kYieldLoops)
+            {
+                std::this_thread::yield();
+                return;
+            }
+            if (header != nullptr)
+            {
+                // Kernel-park on the wake_epoch.  Bump parker_count
+                // around the wait so the notifier side knows to
+                // actually wake us up.  Spurious wakeups are fine:
+                // the surrounding loop re-checks the condition.
+                header->parker_count.fetch_add(1, std::memory_order_acq_rel);
+                const auto epoch{header->wake_epoch.load(std::memory_order_acquire)};
+                header->wake_epoch.wait(epoch, std::memory_order_acquire);
+                header->parker_count.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds{1});
+            return;
+        case WaitStrategy::ParkOnly:
+            std::this_thread::sleep_for(std::chrono::microseconds{1});
+            return;
         }
+    }
 
-        [[nodiscard]] std::uint64_t loops() const noexcept
-        {
-            return loops_;
-        }
+    [[nodiscard]] std::uint64_t loops() const noexcept
+    {
+        return loops_;
+    }
 
-        void reset() noexcept
-        {
-            loops_ = 0;
-        }
+    void reset() noexcept
+    {
+        loops_ = 0;
+    }
 
-      private:
-        static constexpr std::uint64_t kSpinLoops{64U};
-        static constexpr std::uint64_t kYieldLoops{256U};
+  private:
+    static constexpr std::uint64_t kSpinLoops{64U};
+    static constexpr std::uint64_t kYieldLoops{256U};
 
-        WaitStrategy strategy_;
-        std::uint64_t loops_{0};
-    };
+    WaitStrategy strategy_;
+    std::uint64_t loops_{0};
+};
 
 } // namespace coderoast::ipc::detail
 
 // ── Public surface: the shared-memory SPSC channel (uses detail) ─────────────
 export namespace coderoast::ipc
 {
-
 
 template <typename Frame> class SharedMemorySpscChannel
 {
@@ -425,7 +430,7 @@ template <typename Frame> class SharedMemorySpscChannel
         }
 
         SharedMemorySpscChannel channel;
-        channel.name_ = detail::normalise_channel_name(config.name);
+        channel.name_ = normalise_channel_name(config.name);
         channel.policy_ = config.backpressure;
         channel.wait_strategy_ = config.wait_strategy;
         channel.unlink_on_destroy_ = config.unlink_on_destroy;
@@ -454,7 +459,7 @@ template <typename Frame> class SharedMemorySpscChannel
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)
     {
         SharedMemorySpscChannel channel;
-        channel.name_ = detail::normalise_channel_name(name);
+        channel.name_ = normalise_channel_name(name);
         channel.policy_ = backpressure;
         channel.wait_strategy_ = wait_strategy;
         channel.fd_ = detail::shm_open_existing(channel.name_.c_str());
@@ -757,14 +762,14 @@ template <typename Frame> class SharedMemorySpscChannel
 
     static void unlink(std::string_view name)
     {
-        const auto normalised{detail::normalise_channel_name(name)};
+        const auto normalised{normalise_channel_name(name)};
         detail::shm_unlink_name(normalised.c_str());
     }
 
   private:
     [[nodiscard]] static std::size_t data_offset() noexcept
     {
-        return detail::align_up(sizeof(detail::SharedChannelHeader), alignof(Frame));
+        return align_up(sizeof(detail::SharedChannelHeader), alignof(Frame));
     }
 
     [[nodiscard]] static std::size_t map_size_for(std::size_t slot_count) noexcept
@@ -884,6 +889,5 @@ template <typename Frame> class SharedMemorySpscChannel
     bool unlink_on_destroy_{false};
     bool is_producer_{false};
 };
-
 
 } // namespace coderoast::ipc

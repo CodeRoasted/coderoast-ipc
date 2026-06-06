@@ -2,8 +2,8 @@
 // for clarity or simplicity.
 #include <cstring> // §11.9.9b gcc-15 ICE: this TU calls std::memset (module-reachable) AND imports a
                    // first-party module (coderoast.ipc.core) — the combo ICEs the ealias pass
-                   // (nonnull_arg_p). A textual <cstring> gives mem* a canonical decl and dodges it;
-                   // everything else stays `import std`. (clang-21/libc++ has no such issue.)
+    // (nonnull_arg_p). A textual <cstring> gives mem* a canonical decl and dodges it;
+    // everything else stays `import std`. (clang-21/libc++ has no such issue.)
 #include <unistd.h> // POSIX getpid() — not in import std
 
 #include <benchmark/benchmark.h>

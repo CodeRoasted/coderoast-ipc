@@ -1755,4 +1755,4 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class WindowClosedC
     std::uint64_t seals_observed_{0};
 };
 
-}  // namespace coderoast::ipc::consumer
+} // namespace coderoast::ipc::consumer
