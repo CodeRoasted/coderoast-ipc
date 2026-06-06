@@ -22,7 +22,12 @@ class CodeRoastIpcCoreConan(ConanFile):
     exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
 
     def layout(self):
-        build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR", "build")
+        # Keyed editable build dir: malf sets the env (all profiles incl. sanitizer); a RAW
+        # `conan create --profile X` instead reads it from the profile [conf] → a consumer under
+        # ANY profile links THIS dep's matching-profile build, not the libc++-default build/
+        # ([[malf-build-type-isolation]] keying gap).
+        build_dir = (os.environ.get("MALF_EDITABLE_BUILD_DIR")
+                     or self.conf.get("user.malf:editable_build_dir", default="build"))
         self.cpp.build.libdirs = [build_dir]
         # Editable: the build-tree export()'d coderoast_ipc_core-config.cmake (carrying the
         # FILE_SET CXX_MODULES) lives in the build dir → consumers find it there (§10.9).
