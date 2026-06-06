@@ -15,22 +15,13 @@
 // The tests use real SHM channels (via SharedMemorySpscChannel) and
 // unique PID-suffixed names so they are safe under parallel ctest.
 
-#include <algorithm>
-#include <cstdint>
-#include <cstring>
-#include <string>
 #include <unistd.h>
-#include <vector>
 
 #include <gtest/gtest.h>
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/consumer/causal_reorder_buffer.hpp"
-#include "coderoast/ipc/consumer/causal_shm_consumer.hpp"
-#include "coderoast/ipc/consumer/consumer_metrics.hpp"
-#include "coderoast/ipc/consumer/frame_emitter.hpp"
-#include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
-#include "coderoast/ipc/frame.hpp"
+import std;
+import coderoast.ipc.consumer; // §11.9: pure module now
+import coderoast.ipc.core;
 
 namespace
 {

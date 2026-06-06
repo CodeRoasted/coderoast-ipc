@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 
+# 1.5.1 unwrap (Argos to own/review topology): the pure module does `import std`, so CMake's
+# experimental import-std support is required; the gate UUID MUST be set before project()/CXX-enable
+# (451f2fe2-… = CMake 4.3.1's CMAKE_EXPERIMENTAL_CXX_IMPORT_STD, matching the conan tool-cmake).
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+
 project(coderoast_ipc_core LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -12,56 +17,45 @@ option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${PR
 ###########################################################
 #  Sources
 ###########################################################
-file(GLOB_RECURSE API_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/api/*.hpp")
-
 ###########################################################
-#  Header-only library target
+#  Module-bearing library (1.5.1 unwrap — header-only code now lives in the module interface;
+#  the §8.1 wrapper + textual api/ headers are RETIRED). One target carries the file set.
 ###########################################################
-add_library(coderoast_ipc_core INTERFACE ${API_HEADERS})
-# EXPORT_NAME = core (not ipc_core): with NAMESPACE coderoast::ipc:: the exported
-# target is coderoast::ipc::core, matching what consumers reference. Under
-# cmake_find_mode=none the NATIVE export name is the consumed one (§10.12) — it
-# must equal the alias, else find_package yields a target nobody links.
-set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME core)
-add_library(coderoast::ipc::core ALIAS coderoast_ipc_core)
-
-target_include_directories(coderoast_ipc_core
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
-        $<INSTALL_INTERFACE:include>
-)
-
-###########################################################
-#  Named-module wrapper (coderoast.ipc.core) — §8.1 (1.5.0)
-###########################################################
-# The library is INTERFACE (header-only), so the module wrapper is the package's
-# ONLY compiled artifact — a minimal .cppm.o that re-exports the global-module
-# public surface (frame/channel/SPSC). cxx_std_23 PUBLIC is the §10.4 producer
-# gotcha (else "no C++ standard found"); link the lib PUBLIC for the api/ includes.
-add_library(coderoast_ipc_core_module STATIC)
-target_sources(coderoast_ipc_core_module
+add_library(coderoast_ipc_core STATIC)
+target_sources(coderoast_ipc_core
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules
-        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/modules/coderoast_ipc_core.cppm
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_core.cppm
 )
-target_link_libraries(coderoast_ipc_core_module PUBLIC coderoast_ipc_core)
-target_compile_features(coderoast_ipc_core_module PUBLIC cxx_std_23)
-add_library(coderoast::ipc::core_module ALIAS coderoast_ipc_core_module)
+# §11.9 cascade rule: the POSIX shm syscalls + their C macros (errno, O_*, PROT_*, MAP_*) cannot live in
+# the import-std interface — they live in this TEXTUAL implementation unit (own GMF, no import std). It is
+# an ordinary source attached to the module (`module coderoast.ipc.core;`), NOT a file-set interface.
+target_sources(coderoast_ipc_core
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_core_impl.cpp
+)
+# EXPORT_NAME = core: with NAMESPACE coderoast::ipc:: the exported target is coderoast::ipc::core
+# (under cmake_find_mode=none the NATIVE export name is the consumed one, §10.12 — must equal the alias).
+set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME core
+    CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+target_compile_features(coderoast_ipc_core PUBLIC cxx_std_23)
+add_library(coderoast::ipc::core ALIAS coderoast_ipc_core)
+# 1.5.1: the separate _module target is retired (the module lives on coderoast_ipc_core itself).
+# Transitional alias so existing consumers/tests referencing core_module still resolve.
+add_library(coderoast::ipc::core_module ALIAS coderoast_ipc_core)
 
 ###########################################################
 #  Install rules (used by `conan create`)
 ###########################################################
 include(GNUInstallDirs)
-# Library + module wrapper in ONE export set → a single file-set owner
-# (§10.5/§10.8 diamond ODR-safety). Only the module target carries cxx_modules.
-install(TARGETS coderoast_ipc_core coderoast_ipc_core_module
+# Ships the module file set only — no install(DIRECTORY api/) (textual headers deleted in the unwrap).
+install(TARGETS coderoast_ipc_core
     EXPORT coderoast_ipc_coreTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILE_SET cxx_modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/coderoast_ipc_core_modules
 )
-install(DIRECTORY api/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT coderoast_ipc_coreTargets
     NAMESPACE coderoast::ipc::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core
@@ -127,25 +121,15 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
                 "${GTEST_LIB_DIR}/libgtest.a"
                 pthread
             )
+            # 1.5.1: tests import coderoast.ipc.core (built against the std module) → scan + provide std.
+            target_compile_features(coderoast_ipc_core_tests PRIVATE cxx_std_23)
+            set_target_properties(coderoast_ipc_core_tests PROPERTIES
+                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
             
             # Register tests
             add_test(NAME coderoast_ipc_core_tests COMMAND coderoast_ipc_core_tests)
-
-            # Module-import proof (§8.1 / cxx_modules_migration_contract §10.15):
-            # a standalone TU that `import coderoast.ipc.core;` and exercises the
-            # re-exported header-only frame/channel surface. Links the MODULE target
-            # so CMake scans the .cppm + builds the BMI — the runnable proof the
-            # wrapper is soundly importable, both toolchains. (Links bare libgtest.a
-            # like the unit tests, so the TU provides its own main().)
-            add_executable(coderoast_ipc_core_module_test
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/module/test_ipc_core_module_import.cpp")
-            target_include_directories(coderoast_ipc_core_module_test PRIVATE "${GTEST_INCLUDE_DIR}")
-            target_link_libraries(coderoast_ipc_core_module_test PRIVATE
-                coderoast_ipc_core_module
-                "${GTEST_LIB_DIR}/libgtest.a"
-                pthread
-            )
-            add_test(NAME coderoast_ipc_core_module_test COMMAND coderoast_ipc_core_module_test)
+            # (The standalone module-import proof is retired: every unit test now `import`s the
+            #  module directly — the import path is exercised by the whole suite, 1.5.1 unwrap.)
         else()
             message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
         endif()
@@ -193,6 +177,10 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
                 "${BENCHMARK_LIB_DIR}/libbenchmark.a"
                 pthread
             )
+            # 1.5.1: the bench imports coderoast.ipc.core + std → scan for modules + provide the std module.
+            target_compile_features(coderoast_ipc_core_bench PRIVATE cxx_std_23)
+            set_target_properties(coderoast_ipc_core_bench PROPERTIES
+                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
         else()
             message(WARNING "Could not find benchmark. INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
         endif()

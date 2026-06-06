@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.28)
 
+# 1.5.1 unwrap (Argos to own topology): the pure module imports std → gate UUID before project().
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+
 project(coderoast_ipc_consumer LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -11,51 +14,32 @@ option(CODEROAST_IPC_CONSUMER_BUILD_TESTS "Build coderoast_ipc_consumer unit tes
 # Conan dependencies
 find_package(coderoast_ipc_core REQUIRED CONFIG)
 
-file(GLOB_RECURSE API_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/api/*.hpp")
-
-add_library(coderoast_ipc_consumer INTERFACE ${API_HEADERS})
-# EXPORT_NAME = consumer → exported coderoast::ipc::consumer (native name is the
-# consumed one under cmake_find_mode=none, §10.12); must equal the alias.
-set_target_properties(coderoast_ipc_consumer PROPERTIES EXPORT_NAME consumer)
-add_library(coderoast::ipc::consumer ALIAS coderoast_ipc_consumer)
-
-target_include_directories(coderoast_ipc_consumer
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
-        $<INSTALL_INTERFACE:include>
-)
-
-target_link_libraries(coderoast_ipc_consumer
-    INTERFACE
-        coderoast::ipc::core
-)
-
 ###########################################################
-#  Named-module wrapper (coderoast.ipc.consumer) — §8.1 (1.5.0)
+#  Module-bearing library (1.5.1 unwrap — the 10 header-only consumer headers now live in the module
+#  interface, topo-ordered; wrapper + textual api/ retired). The module `import coderoast.ipc.core`.
 ###########################################################
-# Header-only lib → the module is the only compiled artifact. Its GMF #includes
-# the 10 consumer headers (which textually pull core's frame/channel), so it links
-# the lib PUBLIC. cxx_std_23 PUBLIC is the §10.4 producer gotcha.
-add_library(coderoast_ipc_consumer_module STATIC)
-target_sources(coderoast_ipc_consumer_module
+add_library(coderoast_ipc_consumer STATIC)
+target_sources(coderoast_ipc_consumer
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules
-        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/modules/coderoast_ipc_consumer.cppm
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_consumer.cppm
 )
-target_link_libraries(coderoast_ipc_consumer_module PUBLIC coderoast_ipc_consumer)
-target_compile_features(coderoast_ipc_consumer_module PUBLIC cxx_std_23)
-add_library(coderoast::ipc::consumer_module ALIAS coderoast_ipc_consumer_module)
+set_target_properties(coderoast_ipc_consumer PROPERTIES EXPORT_NAME consumer
+    CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+target_compile_features(coderoast_ipc_consumer PUBLIC cxx_std_23)
+target_link_libraries(coderoast_ipc_consumer PUBLIC coderoast::ipc::core)
+add_library(coderoast::ipc::consumer ALIAS coderoast_ipc_consumer)
+# Transitional alias (the separate _module target is retired).
+add_library(coderoast::ipc::consumer_module ALIAS coderoast_ipc_consumer)
 
 include(GNUInstallDirs)
-# Library + module wrapper in ONE export set → single file-set owner (§10.5/§10.8).
-install(TARGETS coderoast_ipc_consumer coderoast_ipc_consumer_module
+install(TARGETS coderoast_ipc_consumer
     EXPORT coderoast_ipc_consumerTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILE_SET cxx_modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/coderoast_ipc_consumer_modules
 )
-install(DIRECTORY api/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT coderoast_ipc_consumerTargets
     NAMESPACE coderoast::ipc::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_consumer
@@ -118,10 +102,12 @@ if(CODEROAST_IPC_CONSUMER_BUILD_TESTS)
                 "${GTEST_LIB_DIR}/libgtest.a"
                 pthread
             )
-            # Ensure core headers are in include path (source tree + installed package)
+            # 1.5.1: tests import coderoast.ipc.{consumer,core} (built against the std module) → scan + provide std.
+            target_compile_features(coderoast_ipc_consumer_tests PRIVATE cxx_std_23)
+            set_target_properties(coderoast_ipc_consumer_tests PROPERTIES
+                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
             target_include_directories(coderoast_ipc_consumer_tests PRIVATE
                 "${GTEST_INCLUDE_DIR}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/../core/api"
             )
             
             # Register tests

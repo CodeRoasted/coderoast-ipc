@@ -14,18 +14,12 @@
 //     with PushStatus::Aborted and consumers with PopStatus::Aborted.
 //     Terminal: cannot be downgraded by close_graceful.
 //
-#include <atomic>
-#include <chrono>
-#include <cstdint>
-#include <cstring>
-#include <string>
-#include <thread>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/frame.hpp"
+import std;
+import coderoast.ipc.core; // §11.9: ipc is a pure module now (headers deleted)
 
 namespace
 {

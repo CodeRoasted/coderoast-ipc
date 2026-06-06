@@ -10,17 +10,18 @@ required_conan_version = ">=2.28"
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
     version = "1.5.1"
-    # Was header-library; the §8.1 module wrapper (coderoast.ipc.core) adds one
-    # compiled .cppm.o → static-library. The api/ surface is still header-only.
+    # 1.5.1 unwrap: PURE named module (coderoast.ipc.core) — the former header-only
+    # api/ surface now lives in the module interface; the textual api/ headers are gone.
+    # One .cppm interface + one textual impl unit (the errno/POSIX syscalls, §11.9) →
+    # static-library. No header surface ships.
     package_type = "static-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
     settings = "os", "arch", "compiler", "build_type"
 
-    exports_sources = "CMakeLists.txt", "modules/*", "api/*", "tests/*", "benchmarks/*"
+    exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
 
     def layout(self):
-        self.cpp.source.includedirs = ["api"]
         build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR", "build")
         self.cpp.build.libdirs = [build_dir]
         # Editable: the build-tree export()'d coderoast_ipc_core-config.cmake (carrying the
@@ -63,15 +64,15 @@ class CodeRoastIpcCoreConan(ConanFile):
                     save(self, os.path.join(self.generators_folder, "benchmark_paths.cmake"), paths_content)
 
     def build(self):
-        # The module wrapper (coderoast.ipc.core) is a compiled .cppm.o + its build-tree
-        # export()'d config — configure+build emits both (the api/ surface is header-only).
+        # coderoast.ipc.core is a compiled module (.cppm.o + impl .o) + its build-tree
+        # export()'d config — configure+build emits both. No header surface.
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
 
     def package(self):
-        # install(DIRECTORY api/) ships the headers; install(EXPORT) + the -config.cmake
-        # ship the module file set (§10.7). The CMakeLists is the single source of truth.
+        # install(EXPORT) + the -config.cmake ship the FILE_SET CXX_MODULES + archive (§10.7);
+        # no install(DIRECTORY api/) (textual headers retired). CMakeLists is the source of truth.
         cmake = CMake(self)
         cmake.install()
 
@@ -80,11 +81,16 @@ class CodeRoastIpcCoreConan(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "coderoast::ipc::core")
         self.cpp_info.bindirs = []
         # Cross-package C++ modules (§10.7): defer to the package's OWN cmake config
-        # (it carries FILE_SET CXX_MODULES; conan's generator does not emit it).
-        # List the editable build-tree config dir AND the create install path; the
-        # absent one is a harmless prefix entry. core is std-only → no find_dependency.
+        # (it carries FILE_SET CXX_MODULES; conan's generator does not emit it). The new
+        # CMakeConfigDeps generator derives <pkg>_DIR (find_package's config hint) from
+        # builddirs[0], so it MUST hold the native config in the CURRENT consumption mode,
+        # else a consumer's find_package(<pkg>) fails (the conan-create defect):
+        #   - editable    → export(EXPORT) wrote it into MALF_EDITABLE_BUILD_DIR
+        #   - conan create → install() shipped it under lib/cmake/coderoast_ipc_core
+        # core is std-only → no find_dependency.
         self.cpp_info.set_property("cmake_find_mode", "none")
-        self.cpp_info.builddirs = [
-            os.environ.get("MALF_EDITABLE_BUILD_DIR", "build"),
-            "lib/cmake/coderoast_ipc_core",
-        ]
+        malf_editable_build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR")
+        if malf_editable_build_dir:
+            self.cpp_info.builddirs = [malf_editable_build_dir, "lib/cmake/coderoast_ipc_core"]
+        else:
+            self.cpp_info.builddirs = ["lib/cmake/coderoast_ipc_core"]

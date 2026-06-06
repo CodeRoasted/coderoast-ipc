@@ -1,98 +1,111 @@
-#pragma once
+// coderoast.ipc.core — PURE named module (1.5.1 unwrap of the §8.1 wrapper). Header-only: the former
+// api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via `import std`.
+//
+// §11.9 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*, PROT_*,
+// MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so a textual
+// GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So every syscall
+// + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import std);
+// this interface holds only the non-template `detail::shm_*` declarations, crossing the boundary with
+// primitives only (int/size_t/void*/const char*) — no std class type unifies across import-std↔textual.
+// detail is a SEALED non-export namespace (§11.9): consumers get the public surface, not the helpers.
+export module coderoast.ipc.core;
+import std;
 
-// =====================================================================
-// coderoast::ipc::SharedMemorySpscChannel
-//
-// Single-producer/single-consumer ring buffer mapped over POSIX shared
-// memory.  Designed for low-latency intra-host log/insight transport
-// where a producer engine and a consumer process exchange fixed-size
-// `Frame` records.
-//
-// Shutdown semantics (this is the contract):
-//
-//   The channel has an explicit state machine, separate from the data
-//   plane, observed atomically by both endpoints:
-//
-//       ┌──────┐  close_graceful()   ┌─────────┐  drain done  ┌────────┐
-//       │ Open │ ──────────────────► │ Closing │ ───────────► │ Closed │
-//       └──────┘                     └─────────┘              └────────┘
-//          │                              │
-//          │ close_abort()                │ close_abort()
-//          ▼                              ▼
-//                       ┌────────────────────────┐
-//                       │       Aborted          │  (terminal)
-//                       └────────────────────────┘
-//
-//   * `close_graceful()` is non-blocking and never writes to the ring.
-//     It atomically transitions Open->Closing and snapshots the current
-//     write_sequence into `closing_at`.  Any subsequent `push()` is
-//     rejected with `PushStatus::Closed`.  Consumers keep popping frames
-//     already in the ring; when `read_sequence == closing_at` they
-//     observe `PopStatus::Closed`.
-//
-//   * `close_abort()` is non-blocking, wakes every parked producer and
-//     consumer, and is terminal.  Frames still in the ring MAY or MAY
-//     NOT be delivered depending on consumer policy.  Use this when the
-//     pipeline is being force-killed (watchdog timeout, fatal error).
-//
-//   * No "EOS sentinel" frame is ever written to the data plane.  The
-//     end of the stream is a state transition, not a frame.  This
-//     removes the impossible tradeoff between "EOS must arrive" and
-//     "ring may be full with no consumer".
-//
-// Backpressure (per `BackpressurePolicy`):
-//   * `Block`             - `push()` waits via the configured WaitStrategy
-//                            until a slot frees, the channel closes, or
-//                            it is aborted.
-//   * `DropNewest`        - `push()` returns `Full` immediately when no
-//                            slot is available.
-//   * `OverwriteOldest`   - `push()` overwrites the oldest unread frame
-//                            (LOSSY -- intended for telemetry-style use).
-//                            Still honours the state machine: rejected
-//                            when Closing/Closed/Aborted.
-//
-// Wait strategies:
-//   * `Spin`         - `__builtin_ia32_pause` forever (lowest latency,
-//                       hot core).
-//   * `SpinYield`    - pause, then `std::this_thread::yield()`.  Never
-//                       sleeps.
-//   * `Adaptive`     - pause -> yield -> `sleep_for(1us)`.  Default.
-//   * `AdaptivePark` - pause -> yield -> kernel-park on `wake_epoch` via
-//                       `std::atomic<uint32_t>::wait()`.  Lowest CPU,
-//                       higher wake latency.  Single-process only on
-//                       libstdc++ (uses FUTEX_WAIT_PRIVATE); see notes
-//                       at the bottom of this file.
-//   * `ParkOnly`     - `sleep_for(1us)` immediately.
-//
-// Threading:
-//   SPSC.  Exactly one producer thread calls push/try_push.  Exactly
-//   one consumer thread calls try_pop.  `close_graceful` and
-//   `close_abort` may be called from ANY thread (including a watchdog)
-//   while a producer or consumer is mid-operation; both are
-//   wait-free and only flip atomics.
-//
-// =====================================================================
-
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <fcntl.h>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <system_error>
-#include <thread>
-#include <type_traits>
-#include <unistd.h>
-#include <utility>
-
-namespace coderoast::ipc
+// ── Public surface: frame + channel data types ──────────────────────────────
+export namespace coderoast::ipc
 {
+
+inline constexpr std::uint32_t kIpcAbiVersion{2U};
+inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
+
+// uint16_t is intentional: stable IPC ABI (paired with `flags` to
+// keep the header at 4-byte alignment) and headroom past 256 formats.
+enum class FrameFormat : std::uint16_t // NOLINT(performance-enum-size)
+{
+    Unknown = 0,
+    Json = 1,
+    Text = 2,
+    Clf = 3,
+    ApacheError = 4,
+    Log4j = 5,
+    Syslog = 6,
+    Rfc5424 = 7,
+    NginxError = 8,
+    Kv = 9,
+    AndroidLogcat = 10,
+    WindowsCbs = 11,
+    SparkHdfs = 12,
+    HealthApp = 13,
+    Proxifier = 14,
+    CloudWatch = 15,
+    SystemdJournal = 16,
+    Hpc = 17,
+    IisW3c = 18,
+    Ecs = 19,
+    OtelJson = 20,
+    GitHubActions = 21,
+};
+
+// uint16_t is intentional: stable IPC ABI (paired with `flags` to
+// keep the header at 4-byte alignment) and headroom past 256 formats.
+enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
+{
+    kLineFrameFlagNone = 0,
+    kLineFrameFlagTruncated = 1U << 0U,
+    kLineFrameFlagEndOfStream = 1U << 1U,
+    kLineFrameFlagWindowSeal = 1U << 2U,
+};
+
+[[nodiscard]] constexpr LineFrameFlags operator|(LineFrameFlags lhs, LineFrameFlags rhs) noexcept
+{
+    using Raw = std::underlying_type_t<LineFrameFlags>;
+    return static_cast<LineFrameFlags>(static_cast<Raw>(lhs) | static_cast<Raw>(rhs));
+}
+
+[[nodiscard]] constexpr bool has_flag(LineFrameFlags flags, LineFrameFlags flag) noexcept
+{
+    using Raw = std::underlying_type_t<LineFrameFlags>;
+    return (static_cast<Raw>(flags) & static_cast<Raw>(flag)) != 0U;
+}
+
+[[nodiscard]] constexpr bool is_control_frame(LineFrameFlags flags) noexcept
+{
+    return has_flag(flags, LineFrameFlags::kLineFrameFlagWindowSeal) ||
+           has_flag(flags, LineFrameFlags::kLineFrameFlagEndOfStream);
+}
+
+struct LineFrameHeader
+{
+    std::uint64_t sequence{0};
+    std::uint64_t shard_sequence{0};
+    std::uint64_t timestamp_unix_ns{0};
+    std::uint64_t logical_tick{0};
+    std::uint64_t run_id{0};
+    std::uint64_t window_id{0};
+    std::uint32_t payload_size{0};
+    std::uint32_t agent_id{0};
+    std::uint32_t agent_order{0};
+    std::uint32_t intra_agent_index{0};
+    std::uint32_t shard_id{0};
+    FrameFormat format{FrameFormat::Unknown};
+    LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};
+    std::uint32_t reserved{0};
+};
+
+template <std::size_t MaxPayload> struct LineFrame
+{
+    static constexpr std::size_t max_payload_bytes{MaxPayload};
+
+    LineFrameHeader header{};
+    std::array<std::byte, MaxPayload> payload{};
+};
+
+using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
+
+static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
+static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
+
+
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
 inline constexpr std::uint32_t kSharedChannelAbiVersion{3U};
@@ -165,10 +178,27 @@ struct ChannelStats
     ChannelState state{ChannelState::Open};
 };
 
-namespace detail
+} // namespace coderoast::ipc
+
+// ── Internal helpers (SEALED, non-export) — uses the public data above ───────
+namespace coderoast::ipc::detail
 {
+
     inline constexpr std::size_t kCacheLineBytes{64U};
-    inline constexpr mode_t kSharedMemoryPermissions{0600};
+
+    // ── POSIX shm syscall wrappers — DEFINED in coderoast_ipc_core_impl.cpp ──────
+    // Each owns one syscall + its C macros (errno, O_*, PROT_*, MAP_*) which cannot
+    // live in this import-std interface (§11.9 cascade rule, see file header). The
+    // boundary crosses primitives only; the throwing ones raise std::runtime_error
+    // built inside the impl unit. fd helpers return a VALID descriptor or throw.
+    [[nodiscard]] int shm_open_create(const char* name);
+    [[nodiscard]] int shm_open_existing(const char* name);
+    void shm_truncate(int descriptor, std::size_t size);
+    [[nodiscard]] std::size_t shm_fstat_size(int descriptor);
+    [[nodiscard]] void* shm_map(int descriptor, std::size_t size);
+    void shm_unmap(void* address, std::size_t size) noexcept;
+    void close_descriptor(int descriptor) noexcept;
+    void shm_unlink_name(const char* name) noexcept;
 
     [[nodiscard]] inline std::size_t align_up(std::size_t value, std::size_t alignment) noexcept
     {
@@ -188,13 +218,6 @@ namespace detail
         }
         std::ranges::replace(out, '.', '_');
         return out;
-    }
-
-    inline void throw_errno(std::string_view action)
-    {
-        const auto error_number{errno};
-        throw std::runtime_error(std::string(action) + " failed: " +
-                                 std::error_code(error_number, std::generic_category()).message());
     }
 
     inline void cpu_pause() noexcept
@@ -343,7 +366,13 @@ namespace detail
         WaitStrategy strategy_;
         std::uint64_t loops_{0};
     };
-} // namespace detail
+
+} // namespace coderoast::ipc::detail
+
+// ── Public surface: the shared-memory SPSC channel (uses detail) ─────────────
+export namespace coderoast::ipc
+{
+
 
 template <typename Frame> class SharedMemorySpscChannel
 {
@@ -404,19 +433,11 @@ template <typename Frame> class SharedMemorySpscChannel
 
         if (config.unlink_before_create)
         {
-            (void)::shm_unlink(channel.name_.c_str());
+            detail::shm_unlink_name(channel.name_.c_str());
         }
 
-        channel.fd_ = ::shm_open(channel.name_.c_str(), O_CREAT | O_EXCL | O_RDWR,
-                                 detail::kSharedMemoryPermissions);
-        if (channel.fd_ < 0)
-        {
-            detail::throw_errno("shm_open(create)");
-        }
-        if (::ftruncate(channel.fd_, static_cast<off_t>(channel.map_size_)) != 0)
-        {
-            detail::throw_errno("ftruncate");
-        }
+        channel.fd_ = detail::shm_open_create(channel.name_.c_str());
+        detail::shm_truncate(channel.fd_, channel.map_size_);
         channel.map_memory();
         std::memset(channel.mapping_, 0, channel.map_size_);
         auto* header{new (channel.mapping_) detail::SharedChannelHeader{}};
@@ -436,17 +457,8 @@ template <typename Frame> class SharedMemorySpscChannel
         channel.name_ = detail::normalise_channel_name(name);
         channel.policy_ = backpressure;
         channel.wait_strategy_ = wait_strategy;
-        channel.fd_ = ::shm_open(channel.name_.c_str(), O_RDWR, detail::kSharedMemoryPermissions);
-        if (channel.fd_ < 0)
-        {
-            detail::throw_errno("shm_open(open)");
-        }
-        struct stat stats{};
-        if (::fstat(channel.fd_, &stats) != 0)
-        {
-            detail::throw_errno("fstat");
-        }
-        channel.map_size_ = static_cast<std::size_t>(stats.st_size);
+        channel.fd_ = detail::shm_open_existing(channel.name_.c_str());
+        channel.map_size_ = detail::shm_fstat_size(channel.fd_);
         channel.map_memory();
         channel.header_ = static_cast<detail::SharedChannelHeader*>(channel.mapping_);
         channel.validate_header();
@@ -725,15 +737,15 @@ template <typename Frame> class SharedMemorySpscChannel
     {
         if (mapping_ != nullptr && map_size_ > 0U)
         {
-            (void)::munmap(mapping_, map_size_);
+            detail::shm_unmap(mapping_, map_size_);
         }
         if (fd_ >= 0)
         {
-            (void)::close(fd_);
+            detail::close_descriptor(fd_);
         }
         if (unlink_on_destroy_ && !name_.empty())
         {
-            (void)::shm_unlink(name_.c_str());
+            detail::shm_unlink_name(name_.c_str());
         }
         mapping_ = nullptr;
         header_ = nullptr;
@@ -746,7 +758,7 @@ template <typename Frame> class SharedMemorySpscChannel
     static void unlink(std::string_view name)
     {
         const auto normalised{detail::normalise_channel_name(name)};
-        (void)::shm_unlink(normalised.c_str());
+        detail::shm_unlink_name(normalised.c_str());
     }
 
   private:
@@ -770,12 +782,7 @@ template <typename Frame> class SharedMemorySpscChannel
 
     void map_memory()
     {
-        mapping_ = ::mmap(nullptr, map_size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
-        if (mapping_ == MAP_FAILED)
-        {
-            mapping_ = nullptr;
-            detail::throw_errno("mmap");
-        }
+        mapping_ = detail::shm_map(fd_, map_size_);
     }
 
     void validate_header() const
@@ -878,26 +885,5 @@ template <typename Frame> class SharedMemorySpscChannel
     bool is_producer_{false};
 };
 
-} // namespace coderoast::ipc
 
-// ---------------------------------------------------------------------
-// Cross-process AdaptivePark notes
-// ---------------------------------------------------------------------
-//
-// `std::atomic<uint32_t>::wait` is implemented on libstdc++ (Linux) via
-// FUTEX_WAIT_PRIVATE, which is scoped to a single process address
-// space.  When this channel is used across processes, AdaptivePark
-// notifications from the producer process will NOT wake a consumer
-// parked in another process, and vice versa.
-//
-// Workarounds for the cross-process case:
-//   * Use WaitStrategy::Adaptive (default).  The 1us sleep_for in the
-//     park phase serves as the wake-up cadence; latency is bounded by
-//     the sleep period.
-//   * Use WaitStrategy::SpinYield if latency matters more than CPU
-//     usage.
-//   * For a true cross-process futex, replace `wake_epoch.wait()` /
-//     `.notify_all()` with raw `futex(FUTEX_WAIT, ...)` /
-//     `futex(FUTEX_WAKE, ...)` syscalls -- those are cross-process by
-//     default on Linux.  Left as future work.
-//
+} // namespace coderoast::ipc

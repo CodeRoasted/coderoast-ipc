@@ -2,18 +2,13 @@
 //
 // Coverage for the WindowClosedConsumer coalescing adapter.
 
-#include <cstdint>
-#include <cstring>
-#include <string>
 #include <unistd.h>
-#include <vector>
 
 #include <gtest/gtest.h>
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/consumer/shm_transport_drainer.hpp"
-#include "coderoast/ipc/consumer/window_closed_consumer.hpp"
-#include "coderoast/ipc/frame.hpp"
+import std;
+import coderoast.ipc.consumer; // §11.9: pure module now
+import coderoast.ipc.core;
 
 namespace
 {

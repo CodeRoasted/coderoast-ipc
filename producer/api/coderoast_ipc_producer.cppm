@@ -1,26 +1,11 @@
-#pragma once
+// coderoast.ipc.producer — PURE named module (1.5.1 unwrap). Header-only: the former
+// shared_memory_producer.hpp content now lives here. std via import std; core frame types via
+// import coderoast.ipc.core (was the textual coderoast/ipc/frame.hpp include).
+export module coderoast.ipc.producer;
+import std;
+import coderoast.ipc.core;
 
-// coderoast/ipc/producer/shared_memory_producer.hpp
-//
-// SharedMemoryProducer — helper for building and sequencing frames into
-// shared-memory channels. Header-only implementation suitable for embedding
-// in any producer sink or adapter.
-//
-// Responsibilities:
-//   * Transport + per-shard sequence tracking
-//   * Frame header construction
-//   * Format/policy enum mapping
-//   * Agent ID stable hashing
-
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <string_view>
-#include <vector>
-
-#include "coderoast/ipc/frame.hpp"
-
-namespace coderoast::ipc::producer
+export namespace coderoast::ipc::producer
 {
 
 // Stable per-agent hash for frame headers (portable across restarts).
@@ -107,4 +92,4 @@ template <typename Frame = DefaultLineFrame> class FrameBuilder
     std::vector<std::uint64_t> shard_sequences_;
 };
 
-} // namespace coderoast::ipc::producer
+}  // namespace coderoast::ipc::producer

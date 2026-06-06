@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.28)
 
+# 1.5.1 unwrap (Argos to own topology): the pure module imports std → gate UUID before project().
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+
 project(coderoast_ipc_producer LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -11,51 +14,32 @@ option(CODEROAST_IPC_PRODUCER_BUILD_TESTS "Build coderoast_ipc_producer unit tes
 # Conan dependencies
 find_package(coderoast_ipc_core REQUIRED CONFIG)
 
-file(GLOB_RECURSE API_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/api/*.hpp")
-
-add_library(coderoast_ipc_producer INTERFACE ${API_HEADERS})
-# EXPORT_NAME = producer → exported coderoast::ipc::producer (native name is the
-# consumed one under cmake_find_mode=none, §10.12); must equal the alias.
-set_target_properties(coderoast_ipc_producer PROPERTIES EXPORT_NAME producer)
-add_library(coderoast::ipc::producer ALIAS coderoast_ipc_producer)
-
-target_include_directories(coderoast_ipc_producer
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
-        $<INSTALL_INTERFACE:include>
-)
-
-target_link_libraries(coderoast_ipc_producer
-    INTERFACE
-        coderoast::ipc::core
-)
-
 ###########################################################
-#  Named-module wrapper (coderoast.ipc.producer) — §8.1 (1.5.0)
+#  Module-bearing library (1.5.1 unwrap — header-only code now in the module interface; wrapper +
+#  textual api/ headers retired). The module `import coderoast.ipc.core`, so link core.
 ###########################################################
-# Header-only lib → the module is the only compiled artifact. Its GMF #includes
-# the producer header (which textually pulls core's frame.hpp), so it links the
-# lib PUBLIC (api/ includes + core). cxx_std_23 PUBLIC is the §10.4 producer gotcha.
-add_library(coderoast_ipc_producer_module STATIC)
-target_sources(coderoast_ipc_producer_module
+add_library(coderoast_ipc_producer STATIC)
+target_sources(coderoast_ipc_producer
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules
-        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/modules/coderoast_ipc_producer.cppm
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_producer.cppm
 )
-target_link_libraries(coderoast_ipc_producer_module PUBLIC coderoast_ipc_producer)
-target_compile_features(coderoast_ipc_producer_module PUBLIC cxx_std_23)
-add_library(coderoast::ipc::producer_module ALIAS coderoast_ipc_producer_module)
+set_target_properties(coderoast_ipc_producer PROPERTIES EXPORT_NAME producer
+    CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+target_compile_features(coderoast_ipc_producer PUBLIC cxx_std_23)
+target_link_libraries(coderoast_ipc_producer PUBLIC coderoast::ipc::core)
+add_library(coderoast::ipc::producer ALIAS coderoast_ipc_producer)
+# Transitional alias (the separate _module target is retired).
+add_library(coderoast::ipc::producer_module ALIAS coderoast_ipc_producer)
 
 include(GNUInstallDirs)
-# Library + module wrapper in ONE export set → single file-set owner (§10.5/§10.8).
-install(TARGETS coderoast_ipc_producer coderoast_ipc_producer_module
+install(TARGETS coderoast_ipc_producer
     EXPORT coderoast_ipc_producerTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILE_SET cxx_modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/coderoast_ipc_producer_modules
 )
-install(DIRECTORY api/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT coderoast_ipc_producerTargets
     NAMESPACE coderoast::ipc::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_producer
@@ -119,6 +103,9 @@ if(CODEROAST_IPC_PRODUCER_BUILD_TESTS)
                 "${GTEST_LIB_DIR}/libgtest.a"
                 pthread
             )
+            target_compile_features(coderoast_ipc_producer_tests PRIVATE cxx_std_23)
+            set_target_properties(coderoast_ipc_producer_tests PROPERTIES
+                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
             # Ensure core headers are in include path (source tree + installed package)
             target_include_directories(coderoast_ipc_producer_tests PRIVATE
                 "${GTEST_INCLUDE_DIR}"

@@ -10,17 +10,16 @@ required_conan_version = ">=2.28"
 class CodeRoastIpcProducerConan(ConanFile):
     name = "coderoast_ipc_producer"
     version = "1.5.1"
-    # §8.1 module wrapper (coderoast.ipc.producer) adds one compiled .cppm.o →
-    # static-library. The api/ surface is still header-only.
+    # 1.5.1 unwrap: PURE named module (coderoast.ipc.producer) — header-only api/ surface now
+    # lives in the module interface; the textual api/ headers are gone. static-library; no header surface.
     package_type = "static-library"
     license = "Apache-2.0"
     description = "Producer-side helpers for coderoast-ipc (frame building, sequence tracking, shard distribution)."
     settings = "os", "arch", "compiler", "build_type"
-    exports_sources = "CMakeLists.txt", "modules/*", "api/*", "tests/*"
+    exports_sources = "CMakeLists.txt", "api/*", "tests/*"
     requires = "coderoast_ipc_core/1.5.1"
 
     def layout(self):
-        self.cpp.source.includedirs = ["api"]
         build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR", "build")
         self.cpp.build.libdirs = [build_dir]
         # Editable: the build-tree export()'d -config.cmake (carrying FILE_SET
@@ -62,8 +61,8 @@ set(GTEST_LIB_DIR "{gtest_libs}")
         cmake.build()
 
     def package(self):
-        # install(DIRECTORY api/) ships headers; install(EXPORT) + the -config.cmake
-        # ship the module file set (§10.7). The CMakeLists is the single source of truth.
+        # install(EXPORT) + the -config.cmake ship the FILE_SET CXX_MODULES + archive (§10.7);
+        # no install(DIRECTORY api/) (textual headers retired). CMakeLists is the source of truth.
         cmake = CMake(self)
         cmake.install()
 
@@ -72,10 +71,14 @@ set(GTEST_LIB_DIR "{gtest_libs}")
         self.cpp_info.set_property("cmake_target_name", "coderoast::ipc::producer")
         self.cpp_info.bindirs = []
         # Cross-package C++ modules (§10.7): defer to the package's OWN cmake config
-        # (carries FILE_SET CXX_MODULES). Editable build-tree config dir + create
-        # install path both listed; the absent one is a harmless prefix entry.
+        # (carries FILE_SET CXX_MODULES). The new CMakeConfigDeps generator derives
+        # <pkg>_DIR (find_package's config hint) from builddirs[0], so it MUST hold the
+        # native config in the CURRENT consumption mode, else find_package(<pkg>) fails:
+        #   - editable    → export(EXPORT) wrote it into MALF_EDITABLE_BUILD_DIR
+        #   - conan create → install() shipped it under lib/cmake/coderoast_ipc_producer
         self.cpp_info.set_property("cmake_find_mode", "none")
-        self.cpp_info.builddirs = [
-            os.environ.get("MALF_EDITABLE_BUILD_DIR", "build"),
-            "lib/cmake/coderoast_ipc_producer",
-        ]
+        malf_editable_build_dir = os.environ.get("MALF_EDITABLE_BUILD_DIR")
+        if malf_editable_build_dir:
+            self.cpp_info.builddirs = [malf_editable_build_dir, "lib/cmake/coderoast_ipc_producer"]
+        else:
+            self.cpp_info.builddirs = ["lib/cmake/coderoast_ipc_producer"]

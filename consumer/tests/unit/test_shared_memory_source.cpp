@@ -1,13 +1,11 @@
 // NOLINTBEGIN : Unit tests may intentionally violate some style rules for clarity or simplicity.
-#include <cstring>
-#include <string>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/consumer/ordered_line_frame_iterator.hpp"
-#include "coderoast/ipc/consumer/shared_memory_source.hpp"
+import std;
+import coderoast.ipc.consumer; // §11.9: pure module now
+import coderoast.ipc.core;
 
 namespace
 {

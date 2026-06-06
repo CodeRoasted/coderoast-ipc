@@ -1,14 +1,15 @@
 // NOLINTBEGIN : Benchmarks are not production code and may intentionally violate some style rules
 // for clarity or simplicity.
-#include <cstddef>
-#include <cstring>
-#include <string>
-#include <unistd.h>
+#include <cstring> // §11.9.9b gcc-15 ICE: this TU calls std::memset (module-reachable) AND imports a
+                   // first-party module (coderoast.ipc.core) — the combo ICEs the ealias pass
+                   // (nonnull_arg_p). A textual <cstring> gives mem* a canonical decl and dodges it;
+                   // everything else stays `import std`. (clang-21/libc++ has no such issue.)
+#include <unistd.h> // POSIX getpid() — not in import std
 
 #include <benchmark/benchmark.h>
 
-#include "coderoast/ipc/channel.hpp"
-#include "coderoast/ipc/frame.hpp"
+import std;
+import coderoast.ipc.core; // §11.9: ipc is a pure module now (headers deleted)
 
 namespace
 {

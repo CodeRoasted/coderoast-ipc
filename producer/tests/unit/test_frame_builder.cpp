@@ -1,7 +1,9 @@
 // NOLINTBEGIN : Unit tests may intentionally violate some style rules for clarity or simplicity.
 #include <gtest/gtest.h>
 
-#include "coderoast/ipc/producer/shared_memory_producer.hpp"
+import std;
+import coderoast.ipc.producer; // §11.9: pure module now
+import coderoast.ipc.core;
 
 using FrameBuilder = coderoast::ipc::producer::FrameBuilder<>;
 
