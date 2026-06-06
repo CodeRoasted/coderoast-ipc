@@ -20,6 +20,10 @@ Diagnostics:
     Add:
       - "*"
     Remove:
+      # modules: a non-exported helper in a NAMED namespace already has module linkage
+      # (internal, not exported, NOT TU-local). This check pushes static/anon-ns = TU-local,
+      # which makes inline interface templates that use it ill-formed (exposes TU-local entity).
+      - misc-use-internal-linkage
       - altera-struct-pack-align
       - altera-unroll-loops
       - cppcoreguidelines-pro-type-member-init

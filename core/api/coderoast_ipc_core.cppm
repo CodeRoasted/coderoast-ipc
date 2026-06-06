@@ -182,8 +182,12 @@ struct ChannelStats
 } // namespace coderoast::ipc
 
 // ── Internal helpers (SEALED, non-export) — uses the public data above ───────
-
-namespace
+// NAMED namespace, NOT anonymous: these helpers are referenced by the INLINE channel
+// templates below, so a consumer instantiating those templates would expose them. An
+// anonymous namespace gives them TU-local linkage → "instantiation exposes TU-local entity"
+// under modules (§11.8/§11.9). `detail` (non-export) seals them from consumers while giving
+// them module linkage. Do NOT let clang-tidy `misc-use-anonymous-namespace` revert this.
+namespace coderoast::ipc::detail
 {
 
 [[nodiscard]] inline std::size_t align_up(std::size_t value, std::size_t alignment) noexcept
@@ -216,10 +220,6 @@ inline void cpu_pause() noexcept
     std::atomic_signal_fence(std::memory_order_seq_cst);
 #endif
 }
-
-} // namespace
-namespace coderoast::ipc::detail
-{
 
 inline constexpr std::size_t kCacheLineBytes{64U};
 
@@ -430,7 +430,7 @@ template <typename Frame> class SharedMemorySpscChannel
         }
 
         SharedMemorySpscChannel channel;
-        channel.name_ = normalise_channel_name(config.name);
+        channel.name_ = detail::normalise_channel_name(config.name);
         channel.policy_ = config.backpressure;
         channel.wait_strategy_ = config.wait_strategy;
         channel.unlink_on_destroy_ = config.unlink_on_destroy;
@@ -459,7 +459,7 @@ template <typename Frame> class SharedMemorySpscChannel
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)
     {
         SharedMemorySpscChannel channel;
-        channel.name_ = normalise_channel_name(name);
+        channel.name_ = detail::normalise_channel_name(name);
         channel.policy_ = backpressure;
         channel.wait_strategy_ = wait_strategy;
         channel.fd_ = detail::shm_open_existing(channel.name_.c_str());
@@ -762,14 +762,14 @@ template <typename Frame> class SharedMemorySpscChannel
 
     static void unlink(std::string_view name)
     {
-        const auto normalised{normalise_channel_name(name)};
+        const auto normalised{detail::normalise_channel_name(name)};
         detail::shm_unlink_name(normalised.c_str());
     }
 
   private:
     [[nodiscard]] static std::size_t data_offset() noexcept
     {
-        return align_up(sizeof(detail::SharedChannelHeader), alignof(Frame));
+        return detail::align_up(sizeof(detail::SharedChannelHeader), alignof(Frame));
     }
 
     [[nodiscard]] static std::size_t map_size_for(std::size_t slot_count) noexcept
