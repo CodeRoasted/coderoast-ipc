@@ -17,6 +17,8 @@ find_package(coderoast_ipc_core REQUIRED CONFIG)
 ###########################################################
 #  Module-bearing library (1.5.1 unwrap — the 10 header-only consumer headers now live in the module
 #  interface, topo-ordered; wrapper + textual api/ retired). The module `import coderoast.ipc.core`.
+#  1.5.2 §11.9.11 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail
+#  layers) — one cohesive causal SHM consumption concern, all-public surface, nothing sealed.
 ###########################################################
 add_library(coderoast_ipc_consumer STATIC)
 target_sources(coderoast_ipc_consumer
@@ -95,7 +97,15 @@ if(CODEROAST_IPC_CONSUMER_BUILD_TESTS)
         if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
             message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
             
+            # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+            # members are pointless here: nothing is sealed). Test TUs import the
+            # coderoast.ipc.consumer.test aggregate, compiled in-target.
             add_executable(coderoast_ipc_consumer_tests ${TEST_SOURCES})
+            target_sources(coderoast_ipc_consumer_tests
+                PRIVATE
+                    FILE_SET cxx_modules TYPE CXX_MODULES
+                    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                    FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/consumer.test.cppm)
             target_link_libraries(coderoast_ipc_consumer_tests PRIVATE
                 coderoast_ipc_consumer
                 coderoast::ipc::core

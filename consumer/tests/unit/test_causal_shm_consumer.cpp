@@ -19,9 +19,7 @@
 
 #include <gtest/gtest.h>
 
-import std;
-import coderoast.ipc.consumer; // §11.9: pure module now
-import coderoast.ipc.core;
+import coderoast.ipc.consumer.test; // std + the facade + core (§11.9.11 aggregate)
 
 namespace
 {

@@ -3,8 +3,7 @@
 
 #include <gtest/gtest.h>
 
-import std;
-import coderoast.ipc.core; // §11.9: ipc is a pure module now (headers deleted)
+import coderoast.ipc.core.test; // std + the facade (§11.9.11 aggregate)
 
 namespace
 {

@@ -20,6 +20,10 @@ option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${PR
 ###########################################################
 #  Module-bearing library (1.5.1 unwrap — header-only code now lives in the module interface;
 #  the §8.1 wrapper + textual api/ headers are RETIRED). One target carries the file set.
+#  1.5.2 §11.9.11 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail layers) —
+#  one cohesive SHM-channel concern, all-public surface, the only non-interface code being the
+#  §11.9.9 textual POSIX impl unit. Nothing is sealed, so the unit tests stay CONSUMERS (they
+#  double as the module-import proof — the reason the standalone proof target was retired).
 ###########################################################
 add_library(coderoast_ipc_core STATIC)
 target_sources(coderoast_ipc_core
@@ -114,7 +118,15 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
         if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
             message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
             
+            # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+            # members are pointless here: nothing is sealed). Test TUs import the
+            # coderoast.ipc.core.test aggregate, compiled in-target.
             add_executable(coderoast_ipc_core_tests ${TEST_SOURCES})
+            target_sources(coderoast_ipc_core_tests
+                PRIVATE
+                    FILE_SET cxx_modules TYPE CXX_MODULES
+                    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                    FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/core.test.cppm)
             target_include_directories(coderoast_ipc_core_tests PRIVATE "${GTEST_INCLUDE_DIR}")
             target_link_libraries(coderoast_ipc_core_tests PRIVATE
                 coderoast_ipc_core
@@ -170,6 +182,8 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
         if(BENCHMARK_INCLUDE_DIR AND BENCHMARK_LIB_DIR)
             message(STATUS "Found benchmark: INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
             
+            # CONSUMER bench target; no coderoast.ipc.core.bench aggregate manufactured —
+            # a single bench TU with a single import (§11.9.11 sizing rule).
             add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
             target_include_directories(coderoast_ipc_core_bench PRIVATE "${BENCHMARK_INCLUDE_DIR}")
             target_link_libraries(coderoast_ipc_core_bench PRIVATE
