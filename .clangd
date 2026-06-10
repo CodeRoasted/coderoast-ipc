@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: build
+  CompilationDatabase: build-clang21-libcxx-release
   # No toolchain pins. clangd follows compile_commands.json (the package's real
   # -std / -stdlib / -isystem) and clang-21 auto-detects the system gcc-15
   # libstdc++ — so this tracks whichever stdlib the package was built under
