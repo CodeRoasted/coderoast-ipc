@@ -90,61 +90,31 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
     )
     if(TEST_SOURCES)
         include(CTest)
+        find_package(GTest REQUIRED CONFIG)
         enable_testing()
-        
-        # Try to load gtest paths from conanfile.py injection
-        if(EXISTS "${CMAKE_BINARY_DIR}/gtest_paths.cmake")
-            include("${CMAKE_BINARY_DIR}/gtest_paths.cmake")
-        endif()
-        
-        # If paths still not set, search in Conan cache
-        if(NOT GTEST_INCLUDE_DIR)
-            file(GLOB_RECURSE GTEST_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/gtest/gtest.h")
-            if(GTEST_HEADER)
-                list(GET GTEST_HEADER 0 GTEST_HEADER_PATH)
-                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_HEADER_PATH}" DIRECTORY)
-                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_INCLUDE_DIR}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(NOT GTEST_LIB_DIR)
-            file(GLOB_RECURSE GTEST_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libgtest.a")
-            if(GTEST_LIB)
-                list(GET GTEST_LIB 0 GTEST_LIB_PATH)
-                get_filename_component(GTEST_LIB_DIR "${GTEST_LIB_PATH}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
-            message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
-            
-            # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
-            # members are pointless here: nothing is sealed). Test TUs import the
-            # coderoast.ipc.core.test aggregate, compiled in-target.
-            add_executable(coderoast_ipc_core_tests ${TEST_SOURCES})
-            target_sources(coderoast_ipc_core_tests
-                PRIVATE
-                    FILE_SET cxx_modules TYPE CXX_MODULES
-                    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
-                    FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/core.test.cppm)
-            target_include_directories(coderoast_ipc_core_tests PRIVATE "${GTEST_INCLUDE_DIR}")
-            target_link_libraries(coderoast_ipc_core_tests PRIVATE
+
+        # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+        # members are pointless here: nothing is sealed). Test TUs import the
+        # coderoast.ipc.core.test aggregate, compiled in-target. Test TUs carry their
+        # own main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
+        add_executable(coderoast_ipc_core_tests ${TEST_SOURCES})
+        target_sources(coderoast_ipc_core_tests
+            PRIVATE
+                FILE_SET cxx_modules TYPE CXX_MODULES
+                BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/core.test.cppm)
+        target_link_libraries(coderoast_ipc_core_tests PRIVATE
                 coderoast_ipc_core
-                "${GTEST_LIB_DIR}/libgtest.a"
-                pthread
-            )
-            # 1.5.1: tests import coderoast.ipc.core (built against the std module) → scan + provide std.
-            target_compile_features(coderoast_ipc_core_tests PRIVATE cxx_std_23)
-            set_target_properties(coderoast_ipc_core_tests PROPERTIES
-                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
-            
-            # Register tests
-            add_test(NAME coderoast_ipc_core_tests COMMAND coderoast_ipc_core_tests)
-            # (The standalone module-import proof is retired: every unit test now `import`s the
-            #  module directly — the import path is exercised by the whole suite, 1.5.1 unwrap.)
-        else()
-            message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
-        endif()
+                GTest::gtest
+        )
+        target_compile_features(coderoast_ipc_core_tests PRIVATE cxx_std_23)
+        set_target_properties(coderoast_ipc_core_tests PROPERTIES
+            CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+        include(GoogleTest)
+        gtest_discover_tests(coderoast_ipc_core_tests)
+
+        # (The standalone module-import proof is retired: every unit test now `import`s the
+        #  module via the aggregate — the import path is exercised by the whole suite.)
     endif()
 endif()
 
@@ -156,47 +126,18 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
         "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/*.cpp"
     )
     if(BENCH_SOURCES)
-        # Try to load benchmark paths from conanfile.py injection
-        if(EXISTS "${CMAKE_BINARY_DIR}/benchmark_paths.cmake")
-            include("${CMAKE_BINARY_DIR}/benchmark_paths.cmake")
-        endif()
-        
-        # If paths still not set, search in Conan cache
-        if(NOT BENCHMARK_INCLUDE_DIR)
-            file(GLOB_RECURSE BENCHMARK_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/benchmark/benchmark.h")
-            if(BENCHMARK_HEADER)
-                list(GET BENCHMARK_HEADER 0 BENCHMARK_HEADER_PATH)
-                get_filename_component(BENCHMARK_INCLUDE_DIR "${BENCHMARK_HEADER_PATH}" DIRECTORY)
-                get_filename_component(BENCHMARK_INCLUDE_DIR "${BENCHMARK_INCLUDE_DIR}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(NOT BENCHMARK_LIB_DIR)
-            file(GLOB_RECURSE BENCHMARK_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libbenchmark.a")
-            if(BENCHMARK_LIB)
-                list(GET BENCHMARK_LIB 0 BENCHMARK_LIB_PATH)
-                get_filename_component(BENCHMARK_LIB_DIR "${BENCHMARK_LIB_PATH}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(BENCHMARK_INCLUDE_DIR AND BENCHMARK_LIB_DIR)
-            message(STATUS "Found benchmark: INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
-            
-            # CONSUMER bench target; no coderoast.ipc.core.bench aggregate manufactured —
-            # a single bench TU with a single import (§11.9.11 sizing rule).
-            add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
-            target_include_directories(coderoast_ipc_core_bench PRIVATE "${BENCHMARK_INCLUDE_DIR}")
-            target_link_libraries(coderoast_ipc_core_bench PRIVATE
-                coderoast_ipc_core
-                "${BENCHMARK_LIB_DIR}/libbenchmark.a"
-                pthread
-            )
-            # 1.5.1: the bench imports coderoast.ipc.core + std → scan for modules + provide the std module.
-            target_compile_features(coderoast_ipc_core_bench PRIVATE cxx_std_23)
-            set_target_properties(coderoast_ipc_core_bench PROPERTIES
-                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
-        else()
-            message(WARNING "Could not find benchmark. INCLUDE=${BENCHMARK_INCLUDE_DIR}, LIB=${BENCHMARK_LIB_DIR}")
-        endif()
+        find_package(benchmark REQUIRED CONFIG)
+
+        # CONSUMER bench target; no coderoast.ipc.core.bench aggregate manufactured —
+        # a single bench TU with a single import (§11.9.11 sizing rule). The TU
+        # carries BENCHMARK_MAIN() → link benchmark::benchmark, not benchmark_main.
+        add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
+        target_link_libraries(coderoast_ipc_core_bench PRIVATE
+            coderoast_ipc_core
+            benchmark::benchmark
+        )
+        target_compile_features(coderoast_ipc_core_bench PRIVATE cxx_std_23)
+        set_target_properties(coderoast_ipc_core_bench PROPERTIES
+            CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
     endif()
 endif()

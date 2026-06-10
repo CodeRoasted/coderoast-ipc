@@ -70,62 +70,28 @@ if(CODEROAST_IPC_PRODUCER_BUILD_TESTS)
     )
     if(TEST_SOURCES)
         include(CTest)
+        find_package(GTest REQUIRED CONFIG)
         enable_testing()
-        
-        # Try to load gtest paths from conanfile.py injection
-        if(EXISTS "${CMAKE_BINARY_DIR}/gtest_paths.cmake")
-            include("${CMAKE_BINARY_DIR}/gtest_paths.cmake")
-        endif()
-        
-        # If paths still not set, search in Conan cache
-        if(NOT GTEST_INCLUDE_DIR)
-            file(GLOB_RECURSE GTEST_HEADER "${CMAKE_BINARY_DIR}/../../../.conan2/**/gtest/gtest.h")
-            if(GTEST_HEADER)
-                list(GET GTEST_HEADER 0 GTEST_HEADER_PATH)
-                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_HEADER_PATH}" DIRECTORY)
-                get_filename_component(GTEST_INCLUDE_DIR "${GTEST_INCLUDE_DIR}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(NOT GTEST_LIB_DIR)
-            file(GLOB_RECURSE GTEST_LIB "${CMAKE_BINARY_DIR}/../../../.conan2/**/libgtest.a")
-            if(GTEST_LIB)
-                list(GET GTEST_LIB 0 GTEST_LIB_PATH)
-                get_filename_component(GTEST_LIB_DIR "${GTEST_LIB_PATH}" DIRECTORY)
-            endif()
-        endif()
-        
-        if(GTEST_INCLUDE_DIR AND GTEST_LIB_DIR)
-            message(STATUS "Found gtest: INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
-            
-            # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
-            # members are pointless here: nothing is sealed). Test TUs import the
-            # coderoast.ipc.producer.test aggregate, compiled in-target.
-            add_executable(coderoast_ipc_producer_tests ${TEST_SOURCES})
-            target_sources(coderoast_ipc_producer_tests
-                PRIVATE
-                    FILE_SET cxx_modules TYPE CXX_MODULES
-                    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
-                    FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/producer.test.cppm)
-            target_link_libraries(coderoast_ipc_producer_tests PRIVATE
+
+        # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+        # members are pointless here: nothing is sealed). Test TUs import the
+        # coderoast.ipc.producer.test aggregate, compiled in-target. Test TUs carry their
+        # own main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
+        add_executable(coderoast_ipc_producer_tests ${TEST_SOURCES})
+        target_sources(coderoast_ipc_producer_tests
+            PRIVATE
+                FILE_SET cxx_modules TYPE CXX_MODULES
+                BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                FILES    ${CMAKE_CURRENT_SOURCE_DIR}/tests/producer.test.cppm)
+        target_link_libraries(coderoast_ipc_producer_tests PRIVATE
                 coderoast_ipc_producer
                 coderoast::ipc::core
-                "${GTEST_LIB_DIR}/libgtest.a"
-                pthread
-            )
-            target_compile_features(coderoast_ipc_producer_tests PRIVATE cxx_std_23)
-            set_target_properties(coderoast_ipc_producer_tests PROPERTIES
-                CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
-            # Ensure core headers are in include path (source tree + installed package)
-            target_include_directories(coderoast_ipc_producer_tests PRIVATE
-                "${GTEST_INCLUDE_DIR}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/../core/api"
-            )
-            
-            # Register tests
-            add_test(NAME coderoast_ipc_producer_tests COMMAND coderoast_ipc_producer_tests)
-        else()
-            message(FATAL_ERROR "Could not find gtest. INCLUDE=${GTEST_INCLUDE_DIR}, LIB=${GTEST_LIB_DIR}")
-        endif()
+                GTest::gtest
+        )
+        target_compile_features(coderoast_ipc_producer_tests PRIVATE cxx_std_23)
+        set_target_properties(coderoast_ipc_producer_tests PROPERTIES
+            CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+        include(GoogleTest)
+        gtest_discover_tests(coderoast_ipc_producer_tests)
     endif()
 endif()

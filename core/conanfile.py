@@ -1,6 +1,5 @@
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeToolchain
-from conan.tools.files import save
+from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps
 import os
 
 
@@ -42,31 +41,12 @@ class CodeRoastIpcCoreConan(ConanFile):
         tc.generator = "Ninja"
         tc.generate()
 
-        # For test builds, inject gtest paths directly to avoid CMakeDeps issues
-        if hasattr(self, "dependencies") and self.dependencies:
-            gtest_dep = self.dependencies.get("gtest", None)
-            if gtest_dep:
-                gtest_include = gtest_dep.cpp_info.includedirs[0]
-                gtest_libs = gtest_dep.cpp_info.libdirs[0] if gtest_dep.cpp_info.libdirs else None
-                
-                if gtest_include and gtest_libs:
-                    paths_content = f'''
-                        set(GTEST_INCLUDE_DIR "{gtest_include}")
-                        set(GTEST_LIB_DIR "{gtest_libs}")
-                        '''
-                    save(self, os.path.join(self.generators_folder, "gtest_paths.cmake"), paths_content)
+        # CMakeConfigDeps (the workspace default generator, §10.12) emits the
+        # gtest/benchmark configs the test/bench targets find_package — the old
+        # manual conan-cache path injection is retired.
+        deps = CMakeDeps(self)
+        deps.generate()
 
-            benchmark_dep = self.dependencies.get("benchmark", None)
-            if benchmark_dep:
-                benchmark_include = benchmark_dep.cpp_info.includedirs[0]
-                benchmark_libs = benchmark_dep.cpp_info.libdirs[0] if benchmark_dep.cpp_info.libdirs else None
-                
-                if benchmark_include and benchmark_libs:
-                    paths_content = f'''
-                        set(BENCHMARK_INCLUDE_DIR "{benchmark_include}")
-                        set(BENCHMARK_LIB_DIR "{benchmark_libs}")
-                        '''
-                    save(self, os.path.join(self.generators_folder, "benchmark_paths.cmake"), paths_content)
 
     def build(self):
         # coderoast.ipc.core is a compiled module (.cppm.o + impl .o) + its build-tree
