@@ -91,6 +91,23 @@ Diagnostics:
 
 ---
 
+# clangd's BACKGROUND INDEXER crashes (SIGSEGV in clang::ASTReader::finishPendingActions
+# ← CXXRecordDecl::addedMember) when it concurrently deserializes the test/bench TUs that
+# `import <pkg>.test;` / `import <pkg>.bench;` (the full-surface re-export aggregators). This
+# is the SAME upstream named-module ASTReader bug that crashes standalone clang-tidy
+# ([[clang-tidy-crashes-on-modules]]) — not config/provenance/stale-BMI. A single-file parse
+# (clangd --check, or just OPENING the file) is fine; only the concurrent indexer trips it,
+# and after 5 crashes VS Code stops restarting the server. Skip indexing these TUs: live
+# diagnostics on the file you open still work; only the project-wide xref entries for the
+# test/bench TUs are dropped (their symbols aren't navigation targets anyway). Remove when
+# clang's module ASTReader is fixed (a future clang point/major) and re-test.
+If:
+  PathMatch: .*/(tests|benchmarks)/.*
+Index:
+  Background: Skip
+
+---
+
 # test_package is compiled during conan create, not in workspace build
 # It gets its dependencies from Conan's temporary build context
 # Suppress header-not-found errors since GTest paths vary by Conan cache layout
