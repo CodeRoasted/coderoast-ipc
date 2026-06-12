@@ -108,6 +108,19 @@ using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
 static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
 static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
 
+// Concept satisfied by LineFrame<N> (and any user type with the same header layout).
+template <typename F>
+concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& f) {
+    { f.header.sequence } -> std::convertible_to<std::uint64_t>;
+    { f.header.logical_tick } -> std::convertible_to<std::uint64_t>;
+    { f.header.timestamp_unix_ns } -> std::convertible_to<std::uint64_t>;
+    { f.header.agent_order } -> std::convertible_to<std::uint32_t>;
+    { f.header.intra_agent_index } -> std::convertible_to<std::uint32_t>;
+    { f.header.shard_id } -> std::convertible_to<std::uint32_t>;
+    { f.header.flags };
+    { f.header.payload_size } -> std::convertible_to<std::uint32_t>;
+};
+
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
 inline constexpr std::uint32_t kSharedChannelAbiVersion{3U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
@@ -379,10 +392,9 @@ class AdaptiveWait
 export namespace coderoast::ipc
 {
 
-template <typename Frame> class SharedMemorySpscChannel
+template <FrameLike Frame> class SharedMemorySpscChannel
 {
   public:
-    static_assert(std::is_trivially_copyable_v<Frame>, "IPC frames must be trivially copyable");
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
                   "coderoast_ipc requires lock-free uint64_t atomics");
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free,

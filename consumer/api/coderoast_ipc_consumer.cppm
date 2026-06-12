@@ -120,7 +120,7 @@ struct CausalKey
     std::uint32_t shard_id{0};
 };
 
-template <typename Frame = coderoast::ipc::DefaultLineFrame> struct OrderedLineFrameIteratorConfig
+struct OrderedLineFrameIteratorConfig
 {
     std::string channel{"coderoast.default"};
     std::size_t shard_count{1};
@@ -131,10 +131,10 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> struct OrderedLineF
     coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
 };
 
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFrameIterator
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFrameIterator
 {
   public:
-    using Config = OrderedLineFrameIteratorConfig<Frame>;
+    using Config = OrderedLineFrameIteratorConfig;
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
 
     OrderedLineFrameIterator() = default;
@@ -573,7 +573,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFr
 /// This type intentionally lives in coderoast-ipc rather than in any
 /// downstream test helper so that the convention is owned and tested by
 /// the IPC package itself.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class ScopedShmChannelSet
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class ScopedShmChannelSet
 {
   public:
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
@@ -701,7 +701,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ScopedShmChan
 ///     watermark the reorder buffer's seal-driven frontier gates on.
 ///   * No causal-ordering / watermark logic lives here — that is step 2's
 ///     responsibility. This stage only knows about SHM transport state.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
 {
   public:
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
@@ -881,7 +881,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportD
 };
 
 // ─────────── from shared_memory_source.hpp ───────────
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemorySource
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class SharedMemorySource
 {
   public:
     struct Config
@@ -985,7 +985,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class SharedMemoryS
 // iterator's ordering so callers can migrate without re-computing the
 // expected frame order.
 
-template <typename Frame>
+template <coderoast::ipc::FrameLike Frame>
 [[nodiscard]] inline CausalKey extract_causal_key(const Frame& frame) noexcept
 {
     return CausalKey{
@@ -997,7 +997,7 @@ template <typename Frame>
     };
 }
 
-template <typename Frame>
+template <coderoast::ipc::FrameLike Frame>
 [[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
 {
     const auto lhs_key{extract_causal_key(lhs)};
@@ -1099,7 +1099,7 @@ template <typename Frame>
 /// **Separation of concerns:** this stage knows nothing about transport
 /// (SHM rings, EOS frames). It pulls *opaque* frames from a
 /// `ShmTransportDrainer` via the narrow `try_pull/shard_eos/...` API.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorderBuffer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class CausalReorderBuffer
 {
   public:
     explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer)
@@ -1334,7 +1334,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalReorder
 /// Keeps emission diagnostics (`emitted()`, `control_dropped()`,
 /// `last_sequence()`) here, away from the ordering logic, so step 2 stays
 /// purely about correctness.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class FrameEmitter
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class FrameEmitter
 {
   public:
     struct Config
@@ -1448,7 +1448,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class FrameEmitter
 /// push an EOS frame to every shard; the drainer absorbs them; once
 /// every shard is EOS and every heap is empty, `all_shards_done()`
 /// returns true and the observer fires `kDrainComplete` exactly once.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalShmConsumer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class CausalShmConsumer
 {
   public:
     using Drainer = ShmTransportDrainer<Frame>;
@@ -1623,7 +1623,7 @@ template <typename Frame = coderoast::ipc::DefaultLineFrame> class CausalShmCons
 /// entries — for the standard 1-window-at-a-time flow this is a single
 /// bucket the unordered_map allocates lazily. Successful frame emission
 /// performs zero allocations.
-template <typename Frame = coderoast::ipc::DefaultLineFrame> class WindowClosedConsumer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class WindowClosedConsumer
 {
   public:
     using Underlying = CausalShmConsumer<Frame>;
