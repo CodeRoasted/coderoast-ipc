@@ -131,7 +131,8 @@ struct OrderedLineFrameIteratorConfig
     coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
 };
 
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class OrderedLineFrameIterator
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class OrderedLineFrameIterator
 {
   public:
     using Config = OrderedLineFrameIteratorConfig;
@@ -573,7 +574,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
 /// This type intentionally lives in coderoast-ipc rather than in any
 /// downstream test helper so that the convention is owned and tested by
 /// the IPC package itself.
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class ScopedShmChannelSet
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class ScopedShmChannelSet
 {
   public:
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
@@ -701,7 +703,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
 ///     watermark the reorder buffer's seal-driven frontier gates on.
 ///   * No causal-ordering / watermark logic lives here — that is step 2's
 ///     responsibility. This stage only knows about SHM transport state.
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class ShmTransportDrainer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class ShmTransportDrainer
 {
   public:
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
@@ -881,7 +884,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
 };
 
 // ─────────── from shared_memory_source.hpp ───────────
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class SharedMemorySource
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class SharedMemorySource
 {
   public:
     struct Config
@@ -1099,7 +1103,8 @@ template <coderoast::ipc::FrameLike Frame>
 /// **Separation of concerns:** this stage knows nothing about transport
 /// (SHM rings, EOS frames). It pulls *opaque* frames from a
 /// `ShmTransportDrainer` via the narrow `try_pull/shard_eos/...` API.
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class CausalReorderBuffer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class CausalReorderBuffer
 {
   public:
     explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer)
@@ -1448,7 +1453,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
 /// push an EOS frame to every shard; the drainer absorbs them; once
 /// every shard is EOS and every heap is empty, `all_shards_done()`
 /// returns true and the observer fires `kDrainComplete` exactly once.
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class CausalShmConsumer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class CausalShmConsumer
 {
   public:
     using Drainer = ShmTransportDrainer<Frame>;
@@ -1623,7 +1629,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
 /// entries — for the standard 1-window-at-a-time flow this is a single
 /// bucket the unordered_map allocates lazily. Successful frame emission
 /// performs zero allocations.
-template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class WindowClosedConsumer
+template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
+class WindowClosedConsumer
 {
   public:
     using Underlying = CausalShmConsumer<Frame>;
