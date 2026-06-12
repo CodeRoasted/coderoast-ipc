@@ -5,7 +5,7 @@
 // regular .o, not a BMI), where the GMF's textual POSIX headers make those macros available in the
 // purview normally. Refinement over the interface ban: this impl unit CAN `import std` for its std
 // needs — only the libc POSIX headers (which carry the macros) stay textual in the GMF. It attaches
-// via `module coderoast.ipc.core;` so the definitions match the interface's `detail::shm_*`
+// via `module coderoast.ipc.core;` so the definitions match the interface's `shm_*`
 // declarations; the interface↔impl boundary crosses primitives only (int/size_t/void*/const char*).
 module;
 #include <cerrno>
@@ -17,7 +17,7 @@ module;
 module coderoast.ipc.core;
 import std;
 
-namespace coderoast::ipc::detail
+namespace coderoast::ipc
 {
 
 namespace
@@ -97,4 +97,4 @@ void shm_unlink_name(const char* name) noexcept
     (void)::shm_unlink(name);
 }
 
-} // namespace coderoast::ipc::detail
+} // namespace coderoast::ipc (module-local, non-exported)

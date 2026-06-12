@@ -7,7 +7,7 @@
 // textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
 // every syscall
 // + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import
-// std); this interface holds only the non-template `detail::shm_*` declarations, crossing the
+// std); this interface holds only the non-template `shm_*` declarations, crossing the
 // boundary with primitives only (int/size_t/void*/const char*) — no std class type unifies across
 // import-std↔textual. detail is a SEALED non-export namespace (§11.9): consumers get the public
 // surface, not the helpers.
@@ -200,7 +200,7 @@ struct ChannelStats
 // anonymous namespace gives them TU-local linkage → "instantiation exposes TU-local entity"
 // under modules (§11.8/§11.9). `detail` (non-export) seals them from consumers while giving
 // them module linkage. Do NOT let clang-tidy `misc-use-anonymous-namespace` revert this.
-namespace coderoast::ipc::detail
+namespace coderoast::ipc
 {
 
 [[nodiscard]] inline std::size_t align_up(std::size_t value, std::size_t alignment) noexcept
@@ -386,7 +386,7 @@ class AdaptiveWait
     std::uint64_t loops_{0};
 };
 
-} // namespace coderoast::ipc::detail
+} // namespace coderoast::ipc (module-local, non-exported)
 
 // ── Public surface: the shared-memory SPSC channel (uses detail) ─────────────
 export namespace coderoast::ipc
@@ -442,7 +442,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         }
 
         SharedMemorySpscChannel channel;
-        channel.name_ = detail::normalise_channel_name(config.name);
+        channel.name_ = normalise_channel_name(config.name);
         channel.policy_ = config.backpressure;
         channel.wait_strategy_ = config.wait_strategy;
         channel.unlink_on_destroy_ = config.unlink_on_destroy;
@@ -450,14 +450,14 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
         if (config.unlink_before_create)
         {
-            detail::shm_unlink_name(channel.name_.c_str());
+            shm_unlink_name(channel.name_.c_str());
         }
 
-        channel.fd_ = detail::shm_open_create(channel.name_.c_str());
-        detail::shm_truncate(channel.fd_, channel.map_size_);
+        channel.fd_ = shm_open_create(channel.name_.c_str());
+        shm_truncate(channel.fd_, channel.map_size_);
         channel.map_memory();
         std::memset(channel.mapping_, 0, channel.map_size_);
-        auto* header{new (channel.mapping_) detail::SharedChannelHeader{}};
+        auto* header{new (channel.mapping_) SharedChannelHeader{}};
         header->slot_count = config.slot_count;
         header->slot_size = sizeof(Frame);
         channel.header_ = header;
@@ -471,13 +471,13 @@ template <FrameLike Frame> class SharedMemorySpscChannel
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)
     {
         SharedMemorySpscChannel channel;
-        channel.name_ = detail::normalise_channel_name(name);
+        channel.name_ = normalise_channel_name(name);
         channel.policy_ = backpressure;
         channel.wait_strategy_ = wait_strategy;
-        channel.fd_ = detail::shm_open_existing(channel.name_.c_str());
-        channel.map_size_ = detail::shm_fstat_size(channel.fd_);
+        channel.fd_ = shm_open_existing(channel.name_.c_str());
+        channel.map_size_ = shm_fstat_size(channel.fd_);
         channel.map_memory();
-        channel.header_ = static_cast<detail::SharedChannelHeader*>(channel.mapping_);
+        channel.header_ = static_cast<SharedChannelHeader*>(channel.mapping_);
         channel.validate_header();
         // is_producer_ stays false: consumer-opened handles must not
         // drive state transitions on destruction.
@@ -642,7 +642,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         }
 
         // Block policy.
-        detail::AdaptiveWait wait{wait_strategy_};
+        AdaptiveWait wait{wait_strategy_};
         bool blocked{false};
         for (;;)
         {
@@ -754,15 +754,15 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     {
         if (mapping_ != nullptr && map_size_ > 0U)
         {
-            detail::shm_unmap(mapping_, map_size_);
+            shm_unmap(mapping_, map_size_);
         }
         if (fd_ >= 0)
         {
-            detail::close_descriptor(fd_);
+            close_descriptor(fd_);
         }
         if (unlink_on_destroy_ && !name_.empty())
         {
-            detail::shm_unlink_name(name_.c_str());
+            shm_unlink_name(name_.c_str());
         }
         mapping_ = nullptr;
         header_ = nullptr;
@@ -774,14 +774,14 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
     static void unlink(std::string_view name)
     {
-        const auto normalised{detail::normalise_channel_name(name)};
-        detail::shm_unlink_name(normalised.c_str());
+        const auto normalised{normalise_channel_name(name)};
+        shm_unlink_name(normalised.c_str());
     }
 
   private:
     [[nodiscard]] static std::size_t data_offset() noexcept
     {
-        return detail::align_up(sizeof(detail::SharedChannelHeader), alignof(Frame));
+        return align_up(sizeof(SharedChannelHeader), alignof(Frame));
     }
 
     [[nodiscard]] static std::size_t map_size_for(std::size_t slot_count) noexcept
@@ -799,7 +799,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
     void map_memory()
     {
-        mapping_ = detail::shm_map(fd_, map_size_);
+        mapping_ = shm_map(fd_, map_size_);
     }
 
     void validate_header() const
@@ -894,7 +894,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     std::string name_;
     int fd_{-1};
     void* mapping_{nullptr};
-    detail::SharedChannelHeader* header_{nullptr};
+    SharedChannelHeader* header_{nullptr};
     std::size_t map_size_{0};
     BackpressurePolicy policy_{BackpressurePolicy::Block};
     WaitStrategy wait_strategy_{WaitStrategy::Adaptive};
