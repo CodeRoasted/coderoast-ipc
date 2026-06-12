@@ -25,7 +25,7 @@ target_sources(coderoast_ipc_consumer
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
-        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_consumer.cppm
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/consumer.cppm
 )
 set_target_properties(coderoast_ipc_consumer PROPERTIES EXPORT_NAME consumer
     CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)

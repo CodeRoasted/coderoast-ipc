@@ -30,14 +30,14 @@ target_sources(coderoast_ipc_core
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
-        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_core.cppm
+        FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/core.cppm
 )
 # §11.9 cascade rule: the POSIX shm syscalls + their C macros (errno, O_*, PROT_*, MAP_*) cannot live in
 # the import-std interface — they live in this TEXTUAL implementation unit (own GMF, no import std). It is
 # an ordinary source attached to the module (`module coderoast.ipc.core;`), NOT a file-set interface.
 target_sources(coderoast_ipc_core
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/api/coderoast_ipc_core_impl.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core_impl.cpp
 )
 # EXPORT_NAME = core: with NAMESPACE coderoast::ipc:: the exported target is coderoast::ipc::core
 # (under cmake_find_mode=none the NATIVE export name is the consumed one, §10.12 — must equal the alias).
