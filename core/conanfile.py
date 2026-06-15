@@ -11,14 +11,17 @@ class CodeRoastIpcCoreConan(ConanFile):
     version = "1.5.3"
     # 1.5.1 unwrap: PURE named module (coderoast.ipc.core) — the former header-only
     # api/ surface now lives in the module interface; the textual api/ headers are gone.
-    # One .cppm interface + one textual impl unit (the errno/POSIX syscalls, §11.9) →
-    # static-library. No header surface ships.
+    # One .cppm interface (api/) + one textual impl unit (src/core_impl.cpp — the
+    # errno/POSIX syscalls, §11.9) → static-library. No header surface ships.
     package_type = "static-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."
     settings = "os", "arch", "compiler", "build_type"
 
-    exports_sources = "CMakeLists.txt", "api/*", "tests/*", "benchmarks/*"
+    # src/* carries the textual impl unit (api/→src/ move, 82959c9). It MUST be exported
+    # or `conan create` cannot find src/core_impl.cpp (editable builds it in-place on disk
+    # and never noticed). Keep in sync with core/CMakeLists.txt target_sources.
+    exports_sources = "CMakeLists.txt", "api/*", "src/*", "tests/*", "benchmarks/*"
 
     def layout(self):
         # Keyed editable build dir: malf sets the env (all profiles incl. sanitizer); a RAW
