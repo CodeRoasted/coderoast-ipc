@@ -8,7 +8,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcCoreConan(ConanFile):
     name = "coderoast_ipc_core"
-    version = "1.5.2"
+    version = "1.5.3"
     # 1.5.1 unwrap: PURE named module (coderoast.ipc.core) — the former header-only
     # api/ surface now lives in the module interface; the textual api/ headers are gone.
     # One .cppm interface + one textual impl unit (the errno/POSIX syscalls, §11.9) →
