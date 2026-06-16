@@ -63,8 +63,16 @@ jobs:
         with:
           version: "2.28.1"
           home: ${{ env.CONAN_HOME }}
-          cache_packages: true
+          cache_packages: false
           profile_detect: false
+
+      - name: Cache conan dep binaries (openssl/boost/drogon/… — keyed on the dep set + profile)
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CONAN_HOME }}
+          key: conan-gcc153-${{ runner.os }}-${{ hashFiles('**/conanfile.py', 'linux-gcc15-release') }}
+          restore-keys: |
+            conan-gcc153-${{ runner.os }}-
 
       - name: Setup Conan profile
         run: |
