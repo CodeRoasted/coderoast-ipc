@@ -1,14 +1,1 @@
-BasedOnStyle: LLVM
-IndentWidth: 4
-TabWidth: 4
-UseTab: Never
-ColumnLimit: 100
-AllowShortIfStatementsOnASingleLine: false
-AllowShortLoopsOnASingleLine: false
-BreakBeforeBraces: Allman
-DerivePointerAlignment: false
-PointerAlignment: Left
-AllowShortFunctionsOnASingleLine: Empty
-SortIncludes: true
-ReflowComments: true
-NamespaceIndentation: Inner
+../malf-toolchain/config/.clang-format
