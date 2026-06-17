@@ -27,47 +27,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      CONAN_HOME: ${{ github.workspace }}/.conan2
       CONAN_PROFILE: linux-gcc15-release
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build python3-pip build-essential
-          # Pin the dev-validated CMake 4.3.x workspace-wide (dev/CI parity). coderoast_server arms
-          # `import std` (CXX_MODULE_STD, gated by the experimental UUID 451f2fe2 — present only in
-          # CMake 4.3.x); Ubuntu's apt cmake (Noble 3.28) lacks that gate. Harmless / kept consistent
-          # in repos that don't arm import std yet.
-          sudo python3 -m pip install --break-system-packages "cmake==4.3.1"
-          hash -r
-          case "$(cmake --version | head -1)" in *" 4.3."*) cmake --version ;; *) echo "::error::expected CMake 4.3.x (got: $(cmake --version | head -1))"; exit 1 ;; esac
-
       - name: Provision gcc-15.3 toolchain (PR124309 fix; replaces PPA gcc-15 = 15.2)
         uses: CodeRoasted/malf-toolchain/.github/actions/setup-gcc153@main
 
-      - name: Setup Conan
-        uses: conan-io/setup-conan@v1
-        with:
-          version: "2.28.1"
-          home: ${{ env.CONAN_HOME }}
-          cache_packages: false
-          profile_detect: false
-
-      - name: Cache conan dep binaries (openssl/boost/drogon/… — keyed on the dep set + gcc-15.3 profile)
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.CONAN_HOME }}
-          key: conan-gcc153-${{ runner.os }}-${{ hashFiles('**/conanfile.py', 'linux-gcc15-release') }}
-          restore-keys: |
-            conan-gcc153-${{ runner.os }}-
-
-      - name: Setup Conan profile
-        run: |
-          mkdir -p "$CONAN_HOME/profiles"
-          cp linux-gcc15-release "$CONAN_HOME/profiles/$CONAN_PROFILE"
+      - name: Setup build env (apt + CMake 4.3.x + Conan + dep cache + canonical profile)
+        uses: CodeRoasted/malf-toolchain/.github/actions/setup-build-env@main
 
       - name: Start build-log capture (the conan-module steps below append; Sift diffs it)
         run: truncate --size 0 "$GITHUB_WORKSPACE/build.log"
