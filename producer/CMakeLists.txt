@@ -32,8 +32,6 @@ set_target_properties(coderoast_ipc_producer PROPERTIES EXPORT_NAME producer
 target_compile_features(coderoast_ipc_producer PUBLIC cxx_std_23)
 target_link_libraries(coderoast_ipc_producer PUBLIC coderoast::ipc::core)
 add_library(coderoast::ipc::producer ALIAS coderoast_ipc_producer)
-# Transitional alias (the separate _module target is retired).
-add_library(coderoast::ipc::producer_module ALIAS coderoast_ipc_producer)
 
 include(GNUInstallDirs)
 install(TARGETS coderoast_ipc_producer

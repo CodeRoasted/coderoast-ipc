@@ -32,8 +32,6 @@ set_target_properties(coderoast_ipc_consumer PROPERTIES EXPORT_NAME consumer
 target_compile_features(coderoast_ipc_consumer PUBLIC cxx_std_23)
 target_link_libraries(coderoast_ipc_consumer PUBLIC coderoast::ipc::core)
 add_library(coderoast::ipc::consumer ALIAS coderoast_ipc_consumer)
-# Transitional alias (the separate _module target is retired).
-add_library(coderoast::ipc::consumer_module ALIAS coderoast_ipc_consumer)
 
 include(GNUInstallDirs)
 install(TARGETS coderoast_ipc_consumer

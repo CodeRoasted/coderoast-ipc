@@ -45,9 +45,6 @@ set_target_properties(coderoast_ipc_core PROPERTIES EXPORT_NAME core
     CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
 target_compile_features(coderoast_ipc_core PUBLIC cxx_std_23)
 add_library(coderoast::ipc::core ALIAS coderoast_ipc_core)
-# 1.5.1: the separate _module target is retired (the module lives on coderoast_ipc_core itself).
-# Transitional alias so existing consumers/tests referencing core_module still resolve.
-add_library(coderoast::ipc::core_module ALIAS coderoast_ipc_core)
 
 ###########################################################
 #  Install rules (used by `conan create`)
