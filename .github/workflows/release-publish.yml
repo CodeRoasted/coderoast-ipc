@@ -135,7 +135,7 @@ jobs:
       - name: Measure + publish the benchmark
         uses: CodeRoasted/malf-toolchain/.github/actions/publish-benchmark@main
         with:
-          label: coderoast-ipc-core
+          outputs: coderoast_ipc_core_bench=coderoast-ipc-core
           subdir: core
           tag: ${{ steps.tag.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
