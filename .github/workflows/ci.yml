@@ -1,10 +1,8 @@
 name: CI
 
 on:
-  workflow_call:     # the Release workflow calls CI as its gate (a tag no longer runs CI standalone)
+  workflow_call:
   workflow_dispatch:
-  push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -12,8 +10,9 @@ jobs:
   ci:
     permissions:
       contents: write
-      pull-requests: write   # Sift dogfood: comment on same-repo PRs + seed on push
-      actions: write         # Sift dogfood: upload the baseline-log artifact
+      # Sift needed permissions (PR + actions write)
+      pull-requests: write   
+      actions: write
     uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-ci.yml@main
     with:
       # ipc is a tower root (no first-party deps to vendor). Root meta-package first, then the three
