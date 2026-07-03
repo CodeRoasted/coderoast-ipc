@@ -1,0 +1,10 @@
+name: Lint
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@main

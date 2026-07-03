@@ -1,0 +1,38 @@
+name: Release
+
+# On a vX.Y.Z tag (or manual re-run): gate on CI (workflow_call to this repo's ci.yml), then publish
+# the three ipc Conan packages + the core benchmark to the GitHub Release via the shared
+# coderoast-release reusable workflow. CI no longer runs standalone on a tag — this is the single tag
+# entry point, so CI and Release never race.
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (vMAJOR.MINOR.PATCH)'
+        required: true
+
+permissions:
+  contents: write        # release job: create/upload the Release
+  pull-requests: write   # ci job Sift dogfood
+  actions: write         # ci job Sift dogfood
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  release:
+    needs: ci
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@main
+    with:
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
+      packages: |
+        coderoast_ipc_core:core
+        coderoast_ipc_consumer:consumer
+        coderoast_ipc_producer:producer
+      benchmark: 'coderoast_ipc_core_bench=coderoast-ipc-core'
+      benchmark-subdir: core
+    secrets: inherit

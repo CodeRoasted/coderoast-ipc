@@ -1,107 +1,26 @@
 name: CI
 
 on:
+  workflow_call:     # the Release workflow calls CI as its gate (a tag no longer runs CI standalone)
   workflow_dispatch:
   push:
     branches: [ main ]
-    tags: [ "v[0-9]+.[0-9]+.[0-9]+" ]
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: write
-  pull-requests: write   # Sift dogfood: comment on same-repo PRs + seed on push; fork PRs skipped (read-only token anyway)
-  actions: write         # Sift dogfood: upload the baseline-log artifact (+ read for last-green resolution)
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    env:
-      CONAN_PROFILE: linux-gcc15-release
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Provision gcc-15.3 toolchain (PR124309 fix; replaces PPA gcc-15 = 15.2)
-        uses: CodeRoasted/malf-toolchain/.github/actions/setup-gcc153@main
-
-      - name: Setup build env (apt + CMake 4.3.x + Conan + dep cache + canonical profile)
-        uses: CodeRoasted/malf-toolchain/.github/actions/setup-build-env@main
-
-      - name: Start build-log capture (the conan-module steps below append; Sift diffs it)
-        run: truncate --size 0 "$GITHUB_WORKSPACE/build.log"
-
-      - name: Build root meta-package
-        run: |
-          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
-          conan create . \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing
-
-      - name: Build and test core package
-        run: |
-          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
-          conan create core \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing
-          
-          # Build and run tests from source with Conan dependencies
-          conan install core \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing \
-            -of core/build_test
-          cmake --preset conan-release -S core -B core/build_test \
-            -DCODEROAST_IPC_CORE_BUILD_TESTS=ON -DCODEROAST_IPC_CORE_BUILD_BENCH=ON
-          cmake --build core/build_test
-          ctest --test-dir core/build_test --output-on-failure
-
-      - name: Build and test consumer package
-        run: |
-          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
-          conan create consumer \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing
-          
-          # Build and run tests from source with Conan dependencies
-          conan install consumer \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing \
-            -of consumer/build_test
-          cmake --preset conan-release -S consumer -B consumer/build_test \
-            -DCODEROAST_IPC_CONSUMER_BUILD_TESTS=ON
-          cmake --build consumer/build_test
-          ctest --test-dir consumer/build_test --output-on-failure
-
-      - name: Build and test producer package
-        run: |
-          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1   # capture the conan-module output for the Sift dogfood
-          conan create producer \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing
-          
-          # Build and run tests from source with Conan dependencies
-          conan install producer \
-            --profile:host="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --profile:build="$CONAN_HOME/profiles/$CONAN_PROFILE" \
-            --build=missing \
-            -of producer/build_test
-          cmake --preset conan-release -S producer -B producer/build_test \
-            -DCODEROAST_IPC_PRODUCER_BUILD_TESTS=ON
-          cmake --build producer/build_test
-          ctest --test-dir producer/build_test --output-on-failure
-
-      - name: Sift — structural diff of this run's build+test log (advisory)
-        if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
-        continue-on-error: true    # advisory: a Sift error must NEVER fail this build
-        uses: CodeRoasted/sift-action@v1
-        with:
-          log: build.log
-          fail-on: none
-          commit-comment: regression
-          build-status: ${{ job.status == 'success' && 'green' || 'red' }}
+  ci:
+    permissions:
+      contents: write
+      pull-requests: write   # Sift dogfood: comment on same-repo PRs + seed on push
+      actions: write         # Sift dogfood: upload the baseline-log artifact
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-ci.yml@main
+    with:
+      # ipc is a tower root (no first-party deps to vendor). Root meta-package first, then the three
+      # sub-packages; each gates its unit tests behind a -D flag, passed as trailing cmake-args.
+      modules: |
+        . false true
+        core true true -DCODEROAST_IPC_CORE_BUILD_TESTS=ON -DCODEROAST_IPC_CORE_BUILD_BENCH=ON
+        consumer true true -DCODEROAST_IPC_CONSUMER_BUILD_TESTS=ON
+        producer true true -DCODEROAST_IPC_PRODUCER_BUILD_TESTS=ON
+    secrets: inherit
