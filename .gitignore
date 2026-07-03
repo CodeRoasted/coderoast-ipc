@@ -60,9 +60,9 @@ producer/*_paths.cmake
 !.conan2/profiles/**
 !.conan2/global.conf
 
-# Bench results (only baseline.json is tracked)
-core/bench_results/**
-!core/bench_results/baseline.json
+# Benchmark outputs are ephemeral; the published baseline lives in coderoast-hub (single source
+# of truth). A regenerated baseline.json must NOT re-enter git — no negation.
+bench_results/
 
 # Editor
 /.vscode/
