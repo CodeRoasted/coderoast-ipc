@@ -54,6 +54,19 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
 BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
 } // namespace
 
-BENCHMARK_MAIN();
+// Custom entry point (was BENCHMARK_MAIN()) so the run disables ASLR first — address-layout
+// randomization otherwise adds run-to-run timing noise (Google Benchmark's "ASLR is enabled" warning).
+int main(int argc, char** argv)
+{
+    benchmark::MaybeReenterWithoutASLR(argc, argv);
+    benchmark::Initialize(&argc, argv);
+    if (benchmark::ReportUnrecognizedArguments(argc, argv))
+    {
+        return 1;
+    }
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
+    return 0;
+}
 // NOLINTEND : Benchmarks are not production code and may intentionally violate some style rules for
 // clarity or simplicity.
