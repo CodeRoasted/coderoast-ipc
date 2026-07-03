@@ -9,10 +9,8 @@ on:
 jobs:
   ci:
     permissions:
-      contents: write
-      # Sift needed permissions (PR + actions write)
-      pull-requests: write   
-      actions: write
+      contents: read
+      actions: read
     uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-ci.yml@main
     with:
       # ipc is a tower root (no first-party deps to vendor). Root meta-package first, then the three
@@ -22,4 +20,22 @@ jobs:
         core true true -DCODEROAST_IPC_CORE_BUILD_TESTS=ON -DCODEROAST_IPC_CORE_BUILD_BENCH=ON
         consumer true true -DCODEROAST_IPC_CONSUMER_BUILD_TESTS=ON
         producer true true -DCODEROAST_IPC_PRODUCER_BUILD_TESTS=ON
+      # PUBLIC repo: sift-mode: public renders the Sift comment fork-safe (read-only token); the
+      # sift-post job below posts it.
+      sift-mode: public
+    secrets: inherit
+
+  # Post the comment the `ci` build rendered to the sift-comment artifact. Separate job so `ci` (which
+  # runs PR code) stays read-only; only THIS job holds pull-requests: write, and it runs no PR code —
+  # it just posts the pre-rendered artifact of this same run. Same-repo PRs only: a fork PR's
+  # pull_request run is read-only, so posting is capped anyway (external forks get no comment).
+  sift-post:
+    needs: ci
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true }}
+    permissions:
+      pull-requests: write
+      actions: read
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-sift-post.yml@main
+    with:
+      run-id: ${{ github.run_id }}
     secrets: inherit
