@@ -98,3 +98,44 @@ jobs:
             gh release create "$TAG" --title "$TAG"
           fi
           gh release upload "$TAG" release-assets/*.tgz --clobber
+
+  benchmark:
+    # Measure the ipc core benchmark suite FRESH at the tag and publish it as a Release asset
+    # (the Hub aggregation mirrors it public). ipc is a leaf (no first-party deps) and ships no
+    # determinism golden. Separate job (needs: publish) so a benchmark hiccup never rolls back
+    # the release. Runs on the dedicated bench runner — publish-benchmark rejects a
+    # scaling-enabled capture.
+    needs: publish
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match vMAJOR.MINOR.PATCH"; exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Provision gcc-15.3 toolchain (PR124309 fix; replaces PPA gcc-15 = 15.2)
+        uses: CodeRoasted/malf-toolchain/.github/actions/setup-gcc153@main
+
+      - name: Setup build env (apt + CMake 4.3.x + Conan + dep cache + canonical profile)
+        uses: CodeRoasted/malf-toolchain/.github/actions/setup-build-env@main
+
+      - name: Measure + publish the benchmark
+        uses: CodeRoasted/malf-toolchain/.github/actions/publish-benchmark@main
+        with:
+          label: coderoast-ipc-core
+          subdir: core
+          tag: ${{ steps.tag.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
