@@ -25,7 +25,7 @@ class CodeRoastIpcConan(ConanFile):
     """
 
     name = "coderoast_ipc"
-    version = "1.7.2"
+    version = "1.7.3"
     package_type = "header-library"
     license = "Apache-2.0"
     description = (
