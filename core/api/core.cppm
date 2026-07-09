@@ -45,8 +45,12 @@ enum class FrameFormat : std::uint16_t // NOLINT(performance-enum-size)
     Hpc = 17,
     IisW3c = 18,
     Ecs = 19,
-    OtelJson = 20,
+    OtelJson = 20,     // OTLP/JSON log record
     GitHubActions = 21,
+    OtelSpanJson = 22, // OTLP/JSON span (flat, one span per line) — the O3 span-native surface
+                       // (insight_otel_epic.md §13). Distinct from OtelJson: a span carries
+                       // name / start+end times / status, not a log body. Additive value; the
+                       // frame header layout is unchanged (uint16), so no ABI bump.
 };
 
 // uint16_t is intentional: stable IPC ABI (paired with `flags` to
