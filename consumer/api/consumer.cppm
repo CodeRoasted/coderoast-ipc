@@ -278,7 +278,14 @@ class OrderedLineFrameIterator
 
     [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
     {
-        return std::string{base} + "_shard_" + std::to_string(shard_id);
+        // Member += (extern-instantiated in libstdc++), NOT the free
+        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
+        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
+        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
+        std::string name{base};
+        name += "_shard_";
+        name += std::to_string(shard_id);
+        return name;
     }
 
     [[nodiscard]] static CausalKey causal_key(const Frame& frame) noexcept
@@ -608,7 +615,14 @@ class ScopedShmChannelSet
 
     [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
     {
-        return std::string{base} + "_shard_" + std::to_string(shard_id);
+        // Member += (extern-instantiated in libstdc++), NOT the free
+        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
+        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
+        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
+        std::string name{base};
+        name += "_shard_";
+        name += std::to_string(shard_id);
+        return name;
     }
 
   private:
@@ -855,7 +869,14 @@ class ShmTransportDrainer
 
     [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
     {
-        return std::string{base} + "_shard_" + std::to_string(shard_id);
+        // Member += (extern-instantiated in libstdc++), NOT the free
+        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
+        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
+        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
+        std::string name{base};
+        name += "_shard_";
+        name += std::to_string(shard_id);
+        return name;
     }
 
   private:
