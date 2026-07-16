@@ -9,11 +9,11 @@ TEST(FrameBuilder, BuildsFrameWithIncrementingGlobalSequence)
 {
     FrameBuilder builder{FrameBuilder::Config{.shard_count = 1, .first_sequence = 1}};
 
-    auto frame1 = builder.build(0, 1000, 64, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame1 = builder.build(0, 1000, 64, 12345);
     EXPECT_EQ(frame1.header.sequence, 1U);
     EXPECT_EQ(frame1.header.shard_sequence, 1U);
 
-    auto frame2 = builder.build(0, 2000, 128, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame2 = builder.build(0, 2000, 128, 12345);
     EXPECT_EQ(frame2.header.sequence, 2U);
     EXPECT_EQ(frame2.header.shard_sequence, 2U);
 }
@@ -22,15 +22,15 @@ TEST(FrameBuilder, TracksSeparatePerShardSequences)
 {
     FrameBuilder builder{FrameBuilder::Config{.shard_count = 2, .first_sequence = 1}};
 
-    auto frame_shard0 = builder.build(0, 1000, 64, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame_shard0 = builder.build(0, 1000, 64, 12345);
     EXPECT_EQ(frame_shard0.header.shard_id, 0U);
     EXPECT_EQ(frame_shard0.header.shard_sequence, 1U);
 
-    auto frame_shard1 = builder.build(1, 1000, 64, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame_shard1 = builder.build(1, 1000, 64, 12345);
     EXPECT_EQ(frame_shard1.header.shard_id, 1U);
     EXPECT_EQ(frame_shard1.header.shard_sequence, 1U);
 
-    auto frame_shard0_2 = builder.build(0, 1000, 64, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame_shard0_2 = builder.build(0, 1000, 64, 12345);
     EXPECT_EQ(frame_shard0_2.header.shard_id, 0U);
     EXPECT_EQ(frame_shard0_2.header.shard_sequence, 2U);
 }
@@ -39,7 +39,7 @@ TEST(FrameBuilder, ModulosShardIdAgainstShardCount)
 {
     FrameBuilder builder{FrameBuilder::Config{.shard_count = 3, .first_sequence = 1}};
 
-    auto frame = builder.build(5, 1000, 64, 12345, coderoast::ipc::FrameFormat::Json);
+    auto frame = builder.build(5, 1000, 64, 12345);
     EXPECT_EQ(frame.header.shard_id, 5 % 3);
 }
 

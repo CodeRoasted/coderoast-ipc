@@ -194,7 +194,7 @@ frame header.
 Helper for constructing and sequencing frames:
 
 ```cpp
-import coderoast.ipc.core;      // FrameFormat and the frame header types
+import coderoast.ipc.core;      // the frame header types
 import coderoast.ipc.producer;
 
 using namespace coderoast::ipc::producer;
@@ -213,8 +213,7 @@ auto frame = builder.build(
     /*shard_id=*/2,
     /*timestamp_unix_ns=*/std::chrono::system_clock::now().time_since_epoch().count(),
     /*payload_size=*/8,
-    /*agent_id_hash=*/agent_id,
-    /*format=*/FrameFormat::Text
+    /*agent_id_hash=*/agent_id
 );
 
 // Frame has auto-incremented transport + per-shard sequences
@@ -225,7 +224,6 @@ std::cout << "Shard seq: " << frame.header.shard_sequence << "\n";
 **Key Features:**
 - Auto-incrementing transport sequence and per-shard sequence
 - Stable agent ID hashing (FNV-1a)
-- Format enum mapping
 - Timestamp injection
 
 The transport sequence is unique and useful for tracing and gap detection.
@@ -374,9 +372,8 @@ struct LineFrameHeader {
     uint32_t agent_order;        // Stable scenario agent order
     uint32_t intra_agent_index;  // Per-agent generation counter
     uint32_t shard_id;           // Shard affinity
-    FrameFormat format;          // 20+ format types (JSON, Text, CLF, etc.)
     LineFrameFlags flags;        // Truncated, EndOfStream, WindowSeal
-    uint32_t reserved;           // ABI padding
+    uint16_t reserved;           // Explicit tail padding (no implicit holes — see below)
 };
 
 template <size_t MaxPayload>
@@ -386,9 +383,21 @@ struct LineFrame {
 };
 ```
 
+The header carries **no format tag**, by rule (ADR 0029 D2): *the transport carries exactly the facts
+the bytes cannot carry, and nothing they can.* The format is intrinsic — the payload bytes carry it and
+the consumer recovers it from them, exactly as it must for a real log that arrives with no frame header.
+A `FrameFormat format` field did ride here until 1.8.1; it had three writers and zero readers, and was
+erased as a latent cheat channel rather than left one `read` away from letting a generator hand the
+consumer an answer production never supplies.
+
+`reserved` is sized so the members tile the struct exactly: an IPC header is `memcpy`'d across a process
+boundary, and implicit padding would put indeterminate bytes on the wire. A `static_assert` on
+`has_unique_object_representations_v` holds the property, so a future field that opens a hole fails the
+build.
+
 ABI version constants ensure compatibility:
-- `kIpcAbiVersion = 2`
-- `kSharedChannelAbiVersion = 2`
+- `kIpcAbiVersion = 3`
+- `kSharedChannelAbiVersion = 3`
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
 should reconstruct canonical order with `(logical_tick, agent_order,

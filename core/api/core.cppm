@@ -18,43 +18,32 @@ import std;
 export namespace coderoast::ipc
 {
 
-inline constexpr std::uint32_t kIpcAbiVersion{2U};
+inline constexpr std::uint32_t kIpcAbiVersion{3U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
-// uint16_t is intentional: stable IPC ABI (paired with `flags` to
-// keep the header at 4-byte alignment) and headroom past 256 formats.
-enum class FrameFormat : std::uint16_t // NOLINT(performance-enum-size)
-{
-    Unknown = 0,
-    Json = 1,
-    Text = 2,
-    Clf = 3,
-    ApacheError = 4,
-    Log4j = 5,
-    Syslog = 6,
-    Rfc5424 = 7,
-    NginxError = 8,
-    Kv = 9,
-    AndroidLogcat = 10,
-    WindowsCbs = 11,
-    SparkHdfs = 12,
-    HealthApp = 13,
-    Proxifier = 14,
-    CloudWatch = 15,
-    SystemdJournal = 16,
-    Hpc = 17,
-    IisW3c = 18,
-    Ecs = 19,
-    OtelJson = 20,     // OTLP/JSON log record
-    GitHubActions = 21,
-    OtelSpanJson = 22, // OTLP/JSON span (flat, one span per line) — the O3 span-native surface
-                       // (insight_otel_epic.md §13). Distinct from OtelJson: a span carries
-                       // name / start+end times / status, not a log body. Additive value; the
-                       // frame header layout is unchanged (uint16), so no ABI bump.
-};
+// ── Why there is no `FrameFormat` here (ADR 0029 D2) ────────────────────────
+// A per-line IntentFormat tag USED to ride this header. It was erased, and the rule that erased it
+// governs every future field on this transport:
+//
+//   The transport carries exactly the facts the bytes cannot carry, and nothing they can.
+//
+// The IntentFormat is INTRINSIC — the bytes carry it (a JSON line looks like JSON; a GHA log contains
+// `##[group]Run `), and canon MUST recover it from them, because bytes are all a real log gives it. A
+// real GHA log arrives over HTTP with no frame header. So a transport that hands canon the answer is a
+// CHEAT CHANNEL: the moment anything reads such a tag, the LogCraft→InSight path is measuring a
+// privileged channel that does not exist in production, and every calibration number it produces is
+// optimistic by an unmeasured amount. The moat is that canon recovers intent FROM BYTES.
+//
+// The IntentChannel (SharedChannelHeader::intent_channel, below) is the OPPOSITE case and is carried:
+// no byte carries it, so someone must declare it — and SHM forwards that declaration rather than
+// inventing it, leaving both paths equally informed. Erasing one field and adding the other is ONE
+// rule applied in two directions, not an inconsistency.
+//
+// The test for any future field here: can a real log's bytes carry this fact? Yes ⇒ the transport MUST
+// NOT carry it. No ⇒ it may.
 
-// uint16_t is intentional: stable IPC ABI (paired with `flags` to
-// keep the header at 4-byte alignment) and headroom past 256 formats.
+// uint16_t is intentional: stable IPC ABI (paired with `reserved` to
+// keep the header free of implicit padding — see LineFrameHeader).
 enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
 {
     kLineFrameFlagNone = 0,
@@ -94,9 +83,11 @@ struct LineFrameHeader
     std::uint32_t agent_order{0};
     std::uint32_t intra_agent_index{0};
     std::uint32_t shard_id{0};
-    FrameFormat format{FrameFormat::Unknown};
     LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};
-    std::uint32_t reserved{0};
+    // Explicit tail padding, sized so the header has NO implicit padding (asserted below). The erased
+    // FrameFormat used to be the uint16 that paired with `flags`; `reserved` takes that slot rather
+    // than letting the compiler insert 2 anonymous bytes, keeping the "no padding" property structural.
+    std::uint16_t reserved{0};
 };
 
 template <std::size_t MaxPayload> struct LineFrame
@@ -111,6 +102,14 @@ using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
 
 static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
 static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
+// The header is memcpy'd across a process boundary, so implicit padding would put INDETERMINATE bytes
+// on the wire — unreadable to a consumer that ever inspected them, and a bit-identity hazard for
+// anything that hashes a frame. `reserved` exists to make the property hold structurally; this asserts
+// it stays true, so a future field that reintroduces a hole fails the build instead of shipping.
+static_assert(std::has_unique_object_representations_v<LineFrameHeader>,
+              "LineFrameHeader has implicit padding — size the trailing `reserved` field so the "
+              "members tile the struct exactly (an IPC header is memcpy'd; padding bytes are "
+              "indeterminate on the wire)");
 
 // Concept satisfied by LineFrame<N> (and any user type with the same header layout).
 template <typename F>
