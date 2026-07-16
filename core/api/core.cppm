@@ -125,8 +125,15 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& f) {
 };
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
-inline constexpr std::uint32_t kSharedChannelAbiVersion{3U};
+inline constexpr std::uint32_t kSharedChannelAbiVersion{4U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
+
+// Capacity of SharedChannelHeader::intent_channel, including the NUL terminator. A channel name is a
+// short package-declared identifier ("annotated", "stripped"); 32 leaves generous headroom while
+// keeping the header a fixed-layout POD. A longer name is REFUSED at open (never truncated — a
+// truncated name would either fail the consumer's vocabulary check far from its cause, or, worse,
+// silently alias another declared name).
+inline constexpr std::size_t kIntentChannelNameCapacity{32U};
 
 enum class BackpressurePolicy : std::uint8_t
 {
@@ -176,12 +183,27 @@ enum class PopStatus : std::uint8_t
 
 struct ChannelConfig
 {
-    std::string name;
+    std::string name; // the SHM ring's name — NOT the intent_channel below
     std::size_t slot_count{kDefaultSharedChannelSlotCount};
     BackpressurePolicy backpressure{BackpressurePolicy::Block};
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
     bool unlink_before_create{true};
     bool unlink_on_destroy{false};
+    // The declared underlying IntentChannel this ring TRANSPORTS (ADR 0029 D3). Set by the producer at
+    // create(); the consumer reads it back off the header at open(). Empty = Unspecified (the producer
+    // did not declare), which is every non-dialect stream.
+    //
+    // Spelled in FULL, never bare `channel`: `name` above is this ring, and `channel` in this namespace
+    // means the ring throughout. The collision is not an accident to hide but the structure to state —
+    // the SHM channel CONTAINS an IntentChannel.
+    //
+    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR 0029 D2): the channel is
+    // EXTRINSIC. No byte carries it — a prose line is byte-identical across channels, which is exactly
+    // why it must be declared and cannot be recovered. So SHM FORWARDS the producer's declaration
+    // rather than inventing an answer, leaving the SHM path and the real `--channel` path equally
+    // informed. That is not a cheat. A format tag would be: the bytes carry the format, so handing it
+    // over would privilege this path over the real one.
+    std::string intent_channel;
 };
 
 struct ChannelStats
@@ -274,6 +296,17 @@ struct SharedChannelHeader
 
     std::uint64_t slot_count{0};
     std::uint64_t slot_size{0};
+
+    // --- the transported IntentChannel (ADR 0029 D3) ---
+    // The declared underlying IntentChannel of the stream this ring carries, NUL-terminated ASCII;
+    // all-zero = Unspecified. CHANNEL-LEVEL, deliberately never per-frame: one IntentChannel per TREE
+    // is the contract, and a per-frame field would *permit* the multi-channel tree that contract
+    // forbids — as well as paying bytes per line for a fact that is constant per stream.
+    //
+    // Written once by the producer at create(), read once by the consumer at open(): a cold,
+    // header-only fact, out of the frame path entirely. It sits with slot_count/slot_size (the other
+    // create-time identity fields), not on a cache line with the hot cursors.
+    std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
     // --- atomic control plane (isolated cache lines) ---
     alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
@@ -444,6 +477,16 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             throw std::invalid_argument("IPC slot_count must be greater than zero");
         }
 
+        // REFUSED, never truncated (ADR 0029 D3): a clipped channel name would reach the consumer as a
+        // different string — failing its vocabulary check far from the cause, or in the worst case
+        // aliasing another declared name and silently mis-gating recognition.
+        if (config.intent_channel.size() >= kIntentChannelNameCapacity)
+        {
+            throw std::invalid_argument("IPC intent_channel name exceeds " +
+                                        std::to_string(kIntentChannelNameCapacity - 1U) + " bytes: '" +
+                                        config.intent_channel + "'");
+        }
+
         SharedMemorySpscChannel channel;
         channel.name_ = normalise_channel_name(config.name);
         channel.policy_ = config.backpressure;
@@ -463,6 +506,11 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         auto* header{new (channel.mapping_) SharedChannelHeader{}};
         header->slot_count = config.slot_count;
         header->slot_size = sizeof(Frame);
+        // Forward the producer's DECLARATION (ADR 0029 D3) — the ring encapsulates an IntentChannel, so
+        // it must say which. The array is value-initialised, so an empty declaration stays all-zero =
+        // Unspecified, and the copy leaves the NUL terminator in place (size < capacity, checked above).
+        std::memcpy(header->intent_channel.data(), config.intent_channel.data(),
+                    config.intent_channel.size());
         channel.header_ = header;
         channel.validate_header();
         channel.is_producer_ = true;
@@ -485,6 +533,20 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         // is_producer_ stays false: consumer-opened handles must not
         // drive state transitions on destruction.
         return channel;
+    }
+
+    // The declared underlying IntentChannel this ring transports (ADR 0029 D3). Empty = Unspecified:
+    // the producer did not declare, so a consumer must not claim dialect depth from this stream — the
+    // same fail-closed-on-DEPTH posture as an undeclared `--channel`. Read off the header, so a
+    // consumer never has to be told out-of-band what it is already carrying.
+    [[nodiscard]] std::string_view intent_channel() const noexcept
+    {
+        if (header_ == nullptr)
+        {
+            return {};
+        }
+        // NUL-terminated by construction (create() refuses a name that would fill the array).
+        return std::string_view{header_->intent_channel.data()};
     }
 
     [[nodiscard]] const std::string& name() const noexcept

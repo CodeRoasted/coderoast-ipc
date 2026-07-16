@@ -91,6 +91,71 @@ TEST(SharedMemorySpscChannel, OverwriteOldestKeepsLatestFrame)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
+// ── The transported IntentChannel (ADR 0029 D3) ────────────────────────────────────────────────
+// The ring ENCAPSULATES an IntentChannel: the producer declares it at create(), the consumer reads it
+// off the header at open(). This is the seam that lets the SHM path be exactly as informed as the real
+// `--channel` path — no more (it forwards a declaration, it does not invent one) and no less (the
+// consumer never has to be told out-of-band what the stream already carries).
+//
+// It is CHANNEL-level, not per-frame, on purpose: one IntentChannel per TREE is the contract, and a
+// per-frame field would *permit* the multi-channel tree that contract forbids.
+TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
+{
+    const auto name{unique_channel("intent_channel")};
+    auto producer{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4, .intent_channel = "annotated"})};
+    EXPECT_EQ(producer.intent_channel(), "annotated");
+
+    auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
+    EXPECT_EQ(consumer.intent_channel(), "annotated")
+        << "the consumer must recover the producer's DECLARED IntentChannel off the header — without "
+           "it the SHM path would have to guess the materialization, which is the one thing a "
+           "consumer must never do (ADR 0029 D2)";
+
+    producer.close();
+    consumer.close();
+    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
+}
+
+// An undeclared ring reads back EMPTY = Unspecified — never a concrete channel. This is the default,
+// and it is what keeps every non-dialect stream (the ~20 pure formats) out of the blast radius.
+TEST(SharedMemoryChannel, UndeclaredIntentChannelIsUnspecifiedNotAConcreteName)
+{
+    const auto name{unique_channel("intent_channel_none")};
+    auto producer{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4})};
+    auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
+
+    EXPECT_TRUE(producer.intent_channel().empty());
+    EXPECT_TRUE(consumer.intent_channel().empty())
+        << "an undeclared ring must read back Unspecified. Defaulting the transport to a concrete "
+           "channel would hand the consumer a materialization nobody declared — the fail-open the "
+           "coordinate exists to close.";
+
+    producer.close();
+    consumer.close();
+    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
+}
+
+// An over-long name is REFUSED, never truncated: a clipped name would reach the consumer as a
+// different string — failing its vocabulary check far from the cause, or silently aliasing another
+// declared name and mis-gating recognition.
+TEST(SharedMemoryChannel, RefusesAnIntentChannelNameThatWouldNotFit)
+{
+    const auto name{unique_channel("intent_channel_long")};
+    const std::string too_long(coderoast::ipc::kIntentChannelNameCapacity, 'x');
+    EXPECT_THROW(
+        {
+            auto ch{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
+                coderoast::ipc::ChannelConfig{
+                    .name = name, .slot_count = 4, .intent_channel = too_long})};
+        },
+        std::invalid_argument)
+        << "a name that does not fit must be refused at create, not silently clipped to " +
+               std::to_string(coderoast::ipc::kIntentChannelNameCapacity - 1U) + " bytes";
+    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
+}
+
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
