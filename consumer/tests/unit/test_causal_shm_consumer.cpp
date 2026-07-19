@@ -267,6 +267,55 @@ TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
     EXPECT_EQ(drained_shards, (std::vector<std::uint32_t>{0U, 1U, 2U}));
 }
 
+// The per-shard seals of one window all carry the SAME causal triple — emit_control_frame sets
+// neither agent_order nor intra_agent_index, so each is (tick, 0, 0). `shard_id` is therefore a
+// REACHABLE tie-break, and it is what makes the reconciled seal order deterministic.
+//
+// This regression pins that. It is arranged so it can FAIL: the shards are pushed in the order
+// 2, 0, 1, so their global `header.sequence` values (1, 2, 3) run OPPOSITE to shard_id. The
+// comparator previously consulted `header.sequence` — the cross-shard racing counter named in
+// CLAUDE.md's determinism carve-out — before ever reaching shard_id, which made the emitted seal
+// order follow the transport race instead of the causal key. Under that comparator this test
+// yields {2, 0, 1}; under the current one it yields {0, 1, 2}.
+//
+// Note this asserts the ORDER, unlike the tail-drain test above, which sorts first because its
+// property is "no seal is stranded by the frontier gate", not "the seals come out in one order".
+TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSequence)
+{
+    constexpr std::uint64_t kSealTick{1000};
+    constexpr std::size_t kShards{3};
+    ProducerHarness producers{"seal_order", kShards};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = kShards}};
+    Buffer buffer{drainer};
+
+    // Push order (and therefore ascending global sequence) deliberately inverts shard_id.
+    constexpr std::array<std::uint32_t, kShards> kPushOrder{2U, 0U, 1U};
+    for (std::size_t index{0}; index < kPushOrder.size(); ++index)
+    {
+        const auto shard{kPushOrder[index]};
+        (void)producers.producers[shard].push(
+            make_frame(static_cast<std::uint64_t>(index) + 1U, shard, "", /*tick=*/kSealTick, 0, 0,
+                       Flags::kLineFrameFlagWindowSeal));
+    }
+
+    std::vector<std::uint32_t> emitted_shards;
+    Frame out{};
+    for (int attempt{0}; attempt < 16 && emitted_shards.size() < kShards; ++attempt)
+    {
+        if (buffer.try_select(out))
+        {
+            emitted_shards.push_back(out.header.shard_id);
+        }
+    }
+
+    ASSERT_EQ(emitted_shards.size(), kShards)
+        << "expected every shard's seal to surface; got " << emitted_shards.size() << "/"
+        << kShards;
+    EXPECT_EQ(emitted_shards, (std::vector<std::uint32_t>{0U, 1U, 2U}))
+        << "seal emission order followed the transport sequence, not the causal key — the "
+           "reconciled stream is no longer a deterministic byte sequence";
+}
+
 TEST(CausalReorderBuffer, DrainedRequiresAllShardsEosAndEmptyHeaps)
 {
     ProducerHarness producers{"drained", 2};
@@ -485,10 +534,13 @@ TEST(ConsumerMetrics, FacadeAggregatesAllStages)
     ProducerHarness producers{"facade_metrics", 1};
     Consumer consumer{Consumer::Config{.channel = producers.base, .shard_count = 1}};
 
-    (void)producers.producers[0].push(make_frame(1, 0, "alpha"));
+    // Distinct ticks are load-bearing, not decoration: the causal key must be unique, and a
+    // fixture that leaves tick/agent_order/intra_agent_index at 0 has no causal identity at all
+    // — it used to be ordered by `header.sequence`, the non-deterministic transport counter.
+    (void)producers.producers[0].push(make_frame(1, 0, "alpha", /*tick=*/10));
     (void)producers.producers[0].push(
-        make_frame(2, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
-    (void)producers.producers[0].push(make_frame(3, 0, "beta"));
+        make_frame(2, 0, "", /*tick=*/20, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    (void)producers.producers[0].push(make_frame(3, 0, "beta", /*tick=*/30));
     producers.producers[0].close_graceful();
 
     Frame out{};

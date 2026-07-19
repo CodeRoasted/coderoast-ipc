@@ -105,18 +105,36 @@ enum class FrameOrdering : std::uint8_t
     CausalKey,
 };
 
+// The causal coordinate of a frame. The key is UNIQUE, but the reason differs by frame class,
+// and conflating the two is what previously hid a determinism defect here:
+//
+//   * DATA frames are unique on `(agent_order, intra_agent_index)` ALONE, structurally.
+//     `agent_order` namespaces are DISJOINT — agents take [0, agents.size()), flow records take
+//     `kFlowOrderBase + flow_index` (logcraft `core.api-agent.cppm`) — and scenario validation
+//     enforces `agents.size() < kFlowOrderBase`, so the headroom cannot be consumed.
+//     `intra_agent_index` is a per-producer run-global monotonic counter.
+//
+//   * CONTROL frames (WindowSeal) are NOT. `SharedMemorySink::emit_control_frame` sets neither
+//     `agent_order` nor `intra_agent_index`, so every shard's seal for window K carries the
+//     identical triple `(T, 0, 0)`. `shard_id` is what separates them, and it is therefore a
+//     REACHABLE tie-break on the hot path — not the defensive dead code it looks like.
+//
+// That second case is why `header.sequence` must never appear in the ordering. It is the GLOBAL
+// transport counter (`producer.cppm`: `global_sequence_.fetch_add`), assigned under a cross-shard
+// race and named explicitly in CLAUDE.md § Determinism & Replay's carve-out as non-deterministic.
+// It used to sit BETWEEN the triple and `shard_id`, so for the tied seals it decided the order
+// and `shard_id` was never consulted: the reconciled seal order was non-deterministic across
+// replays while the code documented it as a "deterministic byte sequence". Ordering on the
+// carve-out field laundered non-determinism straight into the reconciled stream, which is the one
+// place the contract says must be deterministic.
 struct CausalKey
 {
     std::uint64_t logical_tick{0};
     std::uint32_t agent_order{0};
     std::uint32_t intra_agent_index{0};
-    // Final determinism tie-breaker: producer shard_id from the frame header.
-    // No extra wire bytes — shard_id is already populated by the producer
-    // (see shared_memory_producer.hpp::build). Including it here lifts the
-    // consumer contract from "deterministic multiset" to "deterministic byte
-    // sequence", so two replays of the same scenario emit byte-identical
-    // frame streams even when (logical_tick, agent_order, intra_agent_index)
-    // collide across shards.
+    // Separates the per-shard WindowSeals of one window, which tie on the triple above. Already
+    // on the wire (the producer populates it), so this costs no bytes. This is what lifts the
+    // contract from "deterministic multiset" to "deterministic byte sequence".
     std::uint32_t shard_id{0};
 };
 
@@ -142,10 +160,14 @@ template <coderoast::ipc::FrameLike Frame>
     };
 }
 
-// Strict weak ordering over CausalKey, then sequence, then shard_id. Per-shard sequence
-// numbers are independent counters and can collide across shards, so sequence alone is not
-// globally deterministic; shard_id is the final tie-break that lifts the contract from
-// "deterministic multiset" to "deterministic byte sequence" (see CausalKey above).
+// Strict TOTAL order over CausalKey — total, not merely a strict weak ordering, because the
+// four-tuple is unique (see CausalKey: the triple for data frames, the triple + shard_id for the
+// tied per-window seals). Two distinct frames never compare equivalent, so the merge has no
+// residual tie and its output is a deterministic byte sequence.
+//
+// `header.sequence` is deliberately NOT consulted — see the CausalKey comment for why reading the
+// global race-assigned counter here was a live determinism defect rather than a harmless
+// fallback.
 template <coderoast::ipc::FrameLike Frame>
 [[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
 {
@@ -162,10 +184,6 @@ template <coderoast::ipc::FrameLike Frame>
     if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
     {
         return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
-    }
-    if (lhs.header.sequence != rhs.header.sequence)
-    {
-        return lhs.header.sequence < rhs.header.sequence;
     }
     return lhs_key.shard_id < rhs_key.shard_id;
 }
@@ -1137,6 +1155,7 @@ class CausalReorderBuffer
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         out = std::move(const_cast<Frame&>(shards_[best].buffer.top()));
         shards_[best].buffer.pop();
+        check_causal_monotonicity(out);
         selects_succeeded_.fetch_add(1U, std::memory_order_relaxed);
         return true;
     }
@@ -1205,6 +1224,49 @@ class CausalReorderBuffer
         }
     }
 
+    /// The reconciled-order determinism invariant, checked rather than assumed.
+    ///
+    /// CLAUDE.md § Determinism & Replay: the causal order AFTER reconciliation is exactly what
+    /// MUST hold. CausalKey is a unique total order, so the merge's output must be STRICTLY
+    /// increasing. A tie means the uniqueness premise broke upstream (a new producer numbering
+    /// into an existing `agent_order` namespace, a reused `intra_agent_index`, or two control
+    /// frames from one shard in one window); an inversion means the frontier gate released a
+    /// frame before a causally-earlier one had settled. Both are determinism defects that would
+    /// otherwise surface far downstream as an unreproducible replay, so this terminates at the
+    /// point of detection with both keys in hand rather than corrupting the stream silently.
+    ///
+    /// Cost is one comparison per emitted frame, against a select that is already O(shards) —
+    /// determinism outranks the micro-optimization of eliding it.
+    void check_causal_monotonicity(const Frame& frame)
+    {
+        const auto key{extract_causal_key(frame)};
+        if (has_emitted_)
+        {
+            const auto as_tuple{[](const CausalKey& causal_key)
+                                {
+                                    return std::tie(causal_key.logical_tick, causal_key.agent_order,
+                                                    causal_key.intra_agent_index,
+                                                    causal_key.shard_id);
+                                }};
+            if (!(as_tuple(key) > as_tuple(last_emitted_key_)))
+            {
+                std::cerr << "FATAL: causal merge emitted a non-increasing key — the reconciled "
+                             "order is not deterministic.\n  previous: tick="
+                          << last_emitted_key_.logical_tick
+                          << " agent_order=" << last_emitted_key_.agent_order
+                          << " intra_agent_index=" << last_emitted_key_.intra_agent_index
+                          << " shard_id=" << last_emitted_key_.shard_id
+                          << "\n  current:  tick=" << key.logical_tick
+                          << " agent_order=" << key.agent_order
+                          << " intra_agent_index=" << key.intra_agent_index
+                          << " shard_id=" << key.shard_id << '\n';
+                std::abort();
+            }
+        }
+        last_emitted_key_ = key;
+        has_emitted_ = true;
+    }
+
     struct Greater
     {
         bool operator()(const Frame& lhs, const Frame& rhs) const noexcept
@@ -1229,6 +1291,10 @@ class CausalReorderBuffer
     std::vector<ShardState> shards_;
     ConsumerObserver observer_;
     bool drain_complete_notified_{false};
+
+    // Reconciled-order invariant state (see check_causal_monotonicity).
+    CausalKey last_emitted_key_{};
+    bool has_emitted_{false};
 
     std::atomic<std::uint64_t> refills_{0};
     std::atomic<std::uint64_t> selects_attempted_{0};
