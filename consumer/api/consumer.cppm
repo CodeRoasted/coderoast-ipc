@@ -120,6 +120,56 @@ struct CausalKey
     std::uint32_t shard_id{0};
 };
 
+// ── The causal ordering: ONE key, ONE comparator ────────────────────────────
+// Every pipeline that reorders frames causally derives the key here and compares with
+// `causal_less` here. This is deliberate: the pull-based pipeline and the legacy iterator
+// must produce the SAME frame order, and that equivalence used to be three hand-maintained
+// copies plus a comment asserting they matched. One definition makes it true by construction
+// instead of by assertion — there is no longer an equivalence to drift.
+//
+// `logical_tick == 0` means the producer emitted no logical clock, so event time falls back to
+// the wall stamp. The fallback is part of the key, not a caller's job: a caller that forgot it
+// would order un-ticked frames by a 0 that compares equal for every frame.
+template <coderoast::ipc::FrameLike Frame>
+[[nodiscard]] inline CausalKey extract_causal_key(const Frame& frame) noexcept
+{
+    return CausalKey{
+        .logical_tick = frame.header.logical_tick != 0U ? frame.header.logical_tick
+                                                        : frame.header.timestamp_unix_ns,
+        .agent_order = frame.header.agent_order,
+        .intra_agent_index = frame.header.intra_agent_index,
+        .shard_id = frame.header.shard_id,
+    };
+}
+
+// Strict weak ordering over CausalKey, then sequence, then shard_id. Per-shard sequence
+// numbers are independent counters and can collide across shards, so sequence alone is not
+// globally deterministic; shard_id is the final tie-break that lifts the contract from
+// "deterministic multiset" to "deterministic byte sequence" (see CausalKey above).
+template <coderoast::ipc::FrameLike Frame>
+[[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
+{
+    const auto lhs_key{extract_causal_key(lhs)};
+    const auto rhs_key{extract_causal_key(rhs)};
+    if (lhs_key.logical_tick != rhs_key.logical_tick)
+    {
+        return lhs_key.logical_tick < rhs_key.logical_tick;
+    }
+    if (lhs_key.agent_order != rhs_key.agent_order)
+    {
+        return lhs_key.agent_order < rhs_key.agent_order;
+    }
+    if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
+    {
+        return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
+    }
+    if (lhs.header.sequence != rhs.header.sequence)
+    {
+        return lhs.header.sequence < rhs.header.sequence;
+    }
+    return lhs_key.shard_id < rhs_key.shard_id;
+}
+
 struct OrderedLineFrameIteratorConfig
 {
     std::string channel{"coderoast.default"};
@@ -276,54 +326,6 @@ class OrderedLineFrameIterator
         causal_state_.clear();
     }
 
-    [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
-    {
-        // Member += (extern-instantiated in libstdc++), NOT the free
-        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
-        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
-        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
-        std::string name{base};
-        name += "_shard_";
-        name += std::to_string(shard_id);
-        return name;
-    }
-
-    [[nodiscard]] static CausalKey causal_key(const Frame& frame) noexcept
-    {
-        return CausalKey{.logical_tick = frame.header.logical_tick != 0U
-                                             ? frame.header.logical_tick
-                                             : frame.header.timestamp_unix_ns,
-                         .agent_order = frame.header.agent_order,
-                         .intra_agent_index = frame.header.intra_agent_index,
-                         .shard_id = frame.header.shard_id};
-    }
-
-    [[nodiscard]] static bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
-    {
-        const auto lhs_key{causal_key(lhs)};
-        const auto rhs_key{causal_key(rhs)};
-        if (lhs_key.logical_tick != rhs_key.logical_tick)
-        {
-            return lhs_key.logical_tick < rhs_key.logical_tick;
-        }
-        if (lhs_key.agent_order != rhs_key.agent_order)
-        {
-            return lhs_key.agent_order < rhs_key.agent_order;
-        }
-        if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
-        {
-            return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
-        }
-        if (lhs.header.sequence != rhs.header.sequence)
-        {
-            return lhs.header.sequence < rhs.header.sequence;
-        }
-        // Final tie-break: shard_id. Per-shard sequence numbers can collide
-        // across shards (each shard has its own counter), so sequence alone
-        // is not globally deterministic. shard_id is monotonic and unique.
-        return lhs_key.shard_id < rhs_key.shard_id;
-    }
-
   private:
     struct TransportGreater
     {
@@ -335,33 +337,13 @@ class OrderedLineFrameIterator
 
     // Min-heap comparator: smaller CausalKey has higher priority → top() is always
     // the causally-earliest frame held by this shard, regardless of SHM arrival order.
+    // Expressed as the inverse of `causal_less` so the heap order cannot diverge from the
+    // merge order it feeds.
     struct CausalGreater
     {
         bool operator()(const Frame& lhs, const Frame& rhs) const noexcept
         {
-            const auto lhs_key = CausalKey{
-                .logical_tick = lhs.header.logical_tick != 0U ? lhs.header.logical_tick
-                                                              : lhs.header.timestamp_unix_ns,
-                .agent_order = lhs.header.agent_order,
-                .intra_agent_index = lhs.header.intra_agent_index,
-            };
-            const auto rhs_key = CausalKey{
-                .logical_tick = rhs.header.logical_tick != 0U ? rhs.header.logical_tick
-                                                              : rhs.header.timestamp_unix_ns,
-                .agent_order = rhs.header.agent_order,
-                .intra_agent_index = rhs.header.intra_agent_index,
-            };
-            if (lhs_key.logical_tick != rhs_key.logical_tick)
-                return lhs_key.logical_tick > rhs_key.logical_tick;
-            if (lhs_key.agent_order != rhs_key.agent_order)
-                return lhs_key.agent_order > rhs_key.agent_order;
-            if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
-                return lhs_key.intra_agent_index > rhs_key.intra_agent_index;
-            if (lhs.header.sequence != rhs.header.sequence)
-                return lhs.header.sequence > rhs.header.sequence;
-            // Final determinism tie-breaker: producer shard_id. See CausalKey
-            // doc-comment above for rationale.
-            return lhs.header.shard_id > rhs.header.shard_id;
+            return causal_less(rhs, lhs);
         }
     };
 
@@ -613,18 +595,6 @@ class ScopedShmChannelSet
         return shard_count_;
     }
 
-    [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
-    {
-        // Member += (extern-instantiated in libstdc++), NOT the free
-        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
-        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
-        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
-        std::string name{base};
-        name += "_shard_";
-        name += std::to_string(shard_id);
-        return name;
-    }
-
   private:
     void unlink_all() const noexcept
     {
@@ -867,18 +837,6 @@ class ShmTransportDrainer
         channels_.clear();
     }
 
-    [[nodiscard]] static std::string shard_channel_name(std::string_view base, std::size_t shard_id)
-    {
-        // Member += (extern-instantiated in libstdc++), NOT the free
-        // `operator+(std::string&&, const char*)`: gcc-15 + `import std` does not emit that inline
-        // rvalue overload in a pure-module TU, so a downstream pure-module target (the insight_e2e SHM
-        // bench) links it undefined. See [[gcc15-and-cxx-modules]] / ADR 0015.
-        std::string name{base};
-        name += "_shard_";
-        name += std::to_string(shard_id);
-        return name;
-    }
-
   private:
     void notify(ConsumerEvent event, std::size_t shard_id)
     {
@@ -1004,51 +962,7 @@ class SharedMemorySource
 };
 
 // ─────────── from causal_reorder_buffer.hpp ───────────
-// CausalKey + extract_causal_key + causal_less are defined in
-// ordered_line_frame_iterator.hpp and re-used here. The new pull-based
-// pipeline is intentionally byte-for-byte compatible with the legacy
-// iterator's ordering so callers can migrate without re-computing the
-// expected frame order.
 
-template <coderoast::ipc::FrameLike Frame>
-[[nodiscard]] inline CausalKey extract_causal_key(const Frame& frame) noexcept
-{
-    return CausalKey{
-        .logical_tick = frame.header.logical_tick != 0U ? frame.header.logical_tick
-                                                        : frame.header.timestamp_unix_ns,
-        .agent_order = frame.header.agent_order,
-        .intra_agent_index = frame.header.intra_agent_index,
-        .shard_id = frame.header.shard_id,
-    };
-}
-
-template <coderoast::ipc::FrameLike Frame>
-[[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
-{
-    const auto lhs_key{extract_causal_key(lhs)};
-    const auto rhs_key{extract_causal_key(rhs)};
-    if (lhs_key.logical_tick != rhs_key.logical_tick)
-    {
-        return lhs_key.logical_tick < rhs_key.logical_tick;
-    }
-    if (lhs_key.agent_order != rhs_key.agent_order)
-    {
-        return lhs_key.agent_order < rhs_key.agent_order;
-    }
-    if (lhs_key.intra_agent_index != rhs_key.intra_agent_index)
-    {
-        return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
-    }
-    if (lhs.header.sequence != rhs.header.sequence)
-    {
-        return lhs.header.sequence < rhs.header.sequence;
-    }
-    // Final determinism tie-breaker: producer shard_id. Per-shard sequence
-    // numbers are independent counters and can collide across shards, so
-    // sequence alone is not globally deterministic. See CausalKey doc in
-    // ordered_line_frame_iterator.hpp for rationale.
-    return lhs_key.shard_id < rhs_key.shard_id;
-}
 
 /// **Step 2 of the pull-based causal SHM consumer pipeline.**
 ///

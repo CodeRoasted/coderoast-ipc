@@ -72,7 +72,7 @@ struct ProducerHarness
         for (std::size_t shard_id{0}; shard_id < shard_count; ++shard_id)
         {
             producers.emplace_back(Channel::create(coderoast::ipc::ChannelConfig{
-                .name = Drainer::shard_channel_name(base, shard_id),
+                .name = coderoast::ipc::shard_channel_name(base, shard_id),
                 .slot_count = 16,
             }));
         }
@@ -82,7 +82,7 @@ struct ProducerHarness
     {
         for (std::size_t shard_id{0}; shard_id < producers.size(); ++shard_id)
         {
-            Channel::unlink(Drainer::shard_channel_name(base, shard_id));
+            Channel::unlink(coderoast::ipc::shard_channel_name(base, shard_id));
         }
     }
 

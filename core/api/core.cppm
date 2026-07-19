@@ -21,6 +21,24 @@ export namespace coderoast::ipc
 inline constexpr std::uint32_t kIpcAbiVersion{3U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
+// ── Shard channel naming: the WIRE CONTRACT, one definition ─────────────────
+// Producer and consumer must derive the same channel name from the same (base, shard_id)
+// or they open different segments and the pipeline silently connects to nothing. That makes
+// this a contract, not a formatting helper — it lives here, in the module BOTH sides already
+// import, so the two ends cannot drift.
+//
+// Member `+=` (extern-instantiated in libstdc++), NOT the free `operator+(std::string&&,
+// const char*)`: gcc-15 + `import std` does not emit that inline rvalue overload in a pure-module
+// TU, so a downstream pure-module target (the insight_e2e SHM bench) links it undefined.
+// See [[gcc15-and-cxx-modules]] / ADR 0015.
+[[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
+{
+    std::string name{base};
+    name += "_shard_";
+    name += std::to_string(shard_id);
+    return name;
+}
+
 // ── Why there is no `FrameFormat` here (ADR 0029 D2) ────────────────────────
 // A per-line IntentFormat tag USED to ride this header. It was erased, and the rule that erased it
 // governs every future field on this transport:
