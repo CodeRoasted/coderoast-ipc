@@ -172,9 +172,11 @@ while (!consumer.all_shards_done()) {
 
 For callers that need per-window barriers — "tell me when window K has been
 sealed by every shard" — wrap the consumer in `WindowClosedConsumer<Frame>`
-(see the section below). The legacy `SharedMemorySource<Frame>` adapter
-(transport-sequence ordering, `try_pop(payload)` shape) still exists for
-backwards compatibility but new callers should prefer `CausalShmConsumer`.
+(see the section below). `CausalShmConsumer` is the only consumer surface: the
+legacy `OrderedLineFrameIterator` / `SharedMemorySource` pair was removed once
+every caller turned out to be using `FrameOrdering::CausalKey` already, so the
+"raw transport-sequence access" they were retained for had no referent
+(ADR 0033).
 
 **Key features:**
 - Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`

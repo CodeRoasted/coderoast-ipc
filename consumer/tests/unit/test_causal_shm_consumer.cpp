@@ -564,4 +564,10 @@ TEST(ConsumerMetrics, FacadeAggregatesAllStages)
     EXPECT_GE(metrics.reorder.selects_succeeded, 3U); // 2 data + 1 seal
 }
 
+int main(int argc, char** argv)
+{
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
+
 // NOLINTEND : Unit tests intentionally favour clarity over style.
