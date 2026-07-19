@@ -143,7 +143,7 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& f) {
 };
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
-inline constexpr std::uint32_t kSharedChannelAbiVersion{4U};
+inline constexpr std::uint32_t kSharedChannelAbiVersion{5U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
 // Capacity of SharedChannelHeader::intent_channel, including the NUL terminator. A channel name is a
@@ -157,7 +157,6 @@ enum class BackpressurePolicy : std::uint8_t
 {
     Block,
     DropNewest,
-    OverwriteOldest,
 };
 
 enum class WaitStrategy : std::uint8_t
@@ -229,7 +228,6 @@ struct ChannelStats
     std::uint64_t pushed{0};
     std::uint64_t popped{0};
     std::uint64_t dropped{0};
-    std::uint64_t overwritten{0};
     std::uint64_t blocked_events{0};
     std::uint64_t wait_loops{0};
     ChannelState state{ChannelState::Open};
@@ -336,7 +334,6 @@ struct SharedChannelHeader
     Cursor closing_at{};
     // --- stats (relaxed updates) ---
     Cursor dropped{};
-    Cursor overwritten{};
     Cursor blocked_events{};
     Cursor wait_loops{};
 
@@ -708,22 +705,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return try_push_status(frame);
         }
-        if (policy_ == BackpressurePolicy::OverwriteOldest)
-        {
-            const auto _state{state()};
-            if (_state == ChannelState::Aborted)
-            {
-                return PushStatus::Aborted;
-            }
-            if (_state != ChannelState::Open)
-            {
-                return PushStatus::Closed;
-            }
-            overwrite_push_impl(frame);
-            notify_progress();
-            return PushStatus::Ok;
-        }
-
         // Block policy.
         AdaptiveWait wait{wait_strategy_};
         bool blocked{false};
@@ -826,7 +807,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             .pushed = pushed,
             .popped = popped,
             .dropped = header_->dropped.value.load(std::memory_order_relaxed),
-            .overwritten = header_->overwritten.value.load(std::memory_order_relaxed),
             .blocked_events = header_->blocked_events.value.load(std::memory_order_relaxed),
             .wait_loops = header_->wait_loops.value.load(std::memory_order_relaxed),
             .state = state(),
@@ -925,19 +905,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         std::memcpy(slot_ptr(write), &frame, sizeof(Frame));
         header_->write_sequence.value.store(write + 1U, std::memory_order_release);
         return true;
-    }
-
-    void overwrite_push_impl(const Frame& frame) noexcept
-    {
-        const auto write{header_->write_sequence.value.load(std::memory_order_relaxed)};
-        const auto read{header_->read_sequence.value.load(std::memory_order_acquire)};
-        if (write - read >= header_->slot_count)
-        {
-            header_->read_sequence.value.store(read + 1U, std::memory_order_release);
-            header_->overwritten.value.fetch_add(1, std::memory_order_relaxed);
-        }
-        std::memcpy(slot_ptr(write), &frame, sizeof(Frame));
-        header_->write_sequence.value.store(write + 1U, std::memory_order_release);
     }
 
     /// Fast-path notify: bump wake_epoch only if someone is parked.

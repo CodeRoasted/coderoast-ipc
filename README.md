@@ -139,7 +139,7 @@ SharedMemoryChannel<DefaultLineFrame> receiver{
 - `SharedMemoryChannel<Frame>` - SPSC queue template
 - `DefaultLineFrame` - 4KB payload frames (customizable)
 - `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
-- `BackpressurePolicy` - Block, DropNewest, OverwriteOldest
+- `BackpressurePolicy` - Block, DropNewest
 - `WaitStrategy` - Spin, SpinYield, Adaptive, AdaptivePark, ParkOnly
 
 ### Consumer Package: Causal Frame Stream
@@ -437,7 +437,13 @@ default `kWindowDuration` is 25 s in `coderoast-server`) so that one
 
 - **Block:** Sender waits until space available (fairness, bounded latency)
 - **DropNewest:** Reject new writes if full (low-latency producers)
-- **OverwriteOldest:** Overwrite unread frames if full (sliding window)
+
+There is deliberately no overwrite-oldest policy. Such a policy requires the PRODUCER to
+advance the CONSUMER's read cursor, which breaks the single-writer-per-variable invariant
+an SPSC ring rests on: with a full ring `write % slot_count == read % slot_count`, so the
+producer's write targets exactly the slot the consumer is reading. Making it sound needs
+per-slot sequence numbers plus a validation re-read on the hot path — see
+`technical_docs/adr/0033` in the superproject.
 
 ### Wait Strategies
 

@@ -69,28 +69,6 @@ TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
-TEST(SharedMemorySpscChannel, OverwriteOldestKeepsLatestFrame)
-{
-    const auto name{unique_channel("overwrite")};
-    auto producer{
-        coderoast::ipc::SharedMemorySpscChannel<Frame>::create(coderoast::ipc::ChannelConfig{
-            .name = name,
-            .slot_count = 1,
-            .backpressure = coderoast::ipc::BackpressurePolicy::OverwriteOldest})};
-    auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
-
-    EXPECT_TRUE(producer.push(make_frame(1, "one")));
-    EXPECT_TRUE(producer.push(make_frame(2, "two")));
-    EXPECT_EQ(producer.stats().overwritten, 1U);
-
-    Frame out{};
-    ASSERT_TRUE(consumer.try_pop(out));
-    EXPECT_EQ(out.header.sequence, 2U);
-    EXPECT_EQ(payload_of(out), "two");
-
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
-}
-
 // ── The transported IntentChannel (ADR 0029 D3) ────────────────────────────────────────────────
 // The ring ENCAPSULATES an IntentChannel: the producer declares it at create(), the consumer reads it
 // off the header at open(). This is the seam that lets the SHM path be exactly as informed as the real

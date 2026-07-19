@@ -252,36 +252,6 @@ TEST(ChannelShutdown, NoEosFrameWritten)
 }
 
 // --------------------------------------------------------------------
-// 7. OverwriteOldest respects close_graceful: once closed, no further
-//    overwrite happens and the producer reports PushStatus::Closed.
-// --------------------------------------------------------------------
-TEST(ChannelShutdown, OverwriteOldestRespectsClose)
-{
-    ScopedChannel ch{"overwrite_close", /*slot_count=*/2U,
-                     coderoast::ipc::BackpressurePolicy::OverwriteOldest};
-
-    ASSERT_EQ(ch.producer.push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
-    ASSERT_EQ(ch.producer.push_status(make_frame(2)), coderoast::ipc::PushStatus::Ok);
-    // Third push overwrites the oldest under OverwriteOldest.
-    ASSERT_EQ(ch.producer.push_status(make_frame(3)), coderoast::ipc::PushStatus::Ok);
-
-    ch.producer.close_graceful();
-
-    EXPECT_EQ(ch.producer.push_status(make_frame(4)), coderoast::ipc::PushStatus::Closed);
-    EXPECT_EQ(ch.producer.try_push_status(make_frame(5)), coderoast::ipc::PushStatus::Closed);
-
-    // Whatever survived the overwrite must drain before Closed surfaces.
-    Frame out{};
-    std::size_t drained{0};
-    while (ch.consumer.try_pop_status(out) == coderoast::ipc::PopStatus::Ok)
-    {
-        ++drained;
-    }
-    EXPECT_GT(drained, 0U);
-    EXPECT_EQ(ch.consumer.try_pop_status(out), coderoast::ipc::PopStatus::Closed);
-}
-
-// --------------------------------------------------------------------
 // 8. RAII destructor does not hang when a producer is parked in push()
 //    on a full ring.  Destruction must abort the channel first.
 // --------------------------------------------------------------------
