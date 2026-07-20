@@ -1,6 +1,25 @@
 // NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Coverage for the WindowClosedConsumer coalescing adapter.
+//
+// HOMING NOTE (Kleio) — do NOT add a "per-window frame membership" test here.
+// It cannot fail at this layer, and a can't-fail gate is worse than no gate.
+// WindowClosed(K) is synthesized only on the Nth shard's seal for window K
+// (`seal_counts_[K] >= shard_count_`), and each shard's channel is SPSC-FIFO, so a
+// shard's window-K data necessarily precedes its own window-K seal, which necessarily
+// precedes WindowClosed(K). Membership is implied by the adapter's own structure —
+// asserting it here makes the SUT its own oracle.
+//
+// The invariant IS falsifiable one layer up, on the producer, where the seal watermark
+// is applied only once the shard ring has drained (logcraft `sharded_pipeline.cpp`,
+// `apply_seal_if_due()` inside the `depth == 0` branch). It is pinned there, end-to-end
+// over the real transport under real backpressure, by
+// `ShmGate.DataPrecedesSealPerShardUnderBackpressure`
+// (logcraft/core/tests/determinism/test_determinism_shm_gate.cpp) — verified by mutation:
+// hoisting that call out of the drained branch reddens it. Seal completeness at a
+// PlayToTarget freeze is pinned by `ShmGate.WindowSealsCompleteUnderPlayToTargetWithoutStop`;
+// the closed-window count for a fixed target by
+// `CodeRoastServerTestSuite.InsightBarrierClosesEachWindowExactlyOnce` (coderoast-server).
 
 #include <unistd.h>
 
