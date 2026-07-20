@@ -72,8 +72,8 @@ if(CODEROAST_IPC_CONSUMER_BUILD_TESTS)
 
         # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
         # members are pointless here: nothing is sealed). Test TUs import the
-        # coderoast.ipc.consumer.test aggregate, compiled in-target. Test TUs carry their
-        # own main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
+        # coderoast.ipc.consumer.test aggregate, compiled in-target. test_main.cpp carries
+        # the single main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
         add_executable(coderoast_ipc_consumer_tests ${TEST_SOURCES})
         target_sources(coderoast_ipc_consumer_tests
             PRIVATE
