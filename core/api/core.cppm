@@ -45,20 +45,21 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 //
 //   The transport carries exactly the facts the bytes cannot carry, and nothing they can.
 //
-// The IntentFormat is INTRINSIC — the bytes carry it (a JSON line looks like JSON; a GHA log contains
-// `##[group]Run `), and canon MUST recover it from them, because bytes are all a real log gives it. A
-// real GHA log arrives over HTTP with no frame header. So a transport that hands canon the answer is a
-// CHEAT CHANNEL: the moment anything reads such a tag, the LogCraft→InSight path is measuring a
-// privileged channel that does not exist in production, and every calibration number it produces is
-// optimistic by an unmeasured amount. The moat is that canon recovers intent FROM BYTES.
+// The IntentFormat is INTRINSIC — the bytes carry it (a JSON line looks like JSON; a GHA log
+// contains
+// `##[group]Run `), and canon MUST recover it from them, because bytes are all a real log gives it.
+// A real GHA log arrives over HTTP with no frame header. So a transport that hands canon the answer
+// is a CHEAT CHANNEL: the moment anything reads such a tag, the LogCraft→InSight path is measuring
+// a privileged channel that does not exist in production, and every calibration number it produces
+// is optimistic by an unmeasured amount. The moat is that canon recovers intent FROM BYTES.
 //
-// The IntentChannel (SharedChannelHeader::intent_channel, below) is the OPPOSITE case and is carried:
-// no byte carries it, so someone must declare it — and SHM forwards that declaration rather than
-// inventing it, leaving both paths equally informed. Erasing one field and adding the other is ONE
-// rule applied in two directions, not an inconsistency.
+// The IntentChannel (SharedChannelHeader::intent_channel, below) is the OPPOSITE case and is
+// carried: no byte carries it, so someone must declare it — and SHM forwards that declaration
+// rather than inventing it, leaving both paths equally informed. Erasing one field and adding the
+// other is ONE rule applied in two directions, not an inconsistency.
 //
-// The test for any future field here: can a real log's bytes carry this fact? Yes ⇒ the transport MUST
-// NOT carry it. No ⇒ it may.
+// The test for any future field here: can a real log's bytes carry this fact? Yes ⇒ the transport
+// MUST NOT carry it. No ⇒ it may.
 
 // uint16_t is intentional: stable IPC ABI (paired with `reserved` to
 // keep the header free of implicit padding — see LineFrameHeader).
@@ -102,9 +103,10 @@ struct LineFrameHeader
     std::uint32_t intra_agent_index{0};
     std::uint32_t shard_id{0};
     LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};
-    // Explicit tail padding, sized so the header has NO implicit padding (asserted below). The erased
-    // FrameFormat used to be the uint16 that paired with `flags`; `reserved` takes that slot rather
-    // than letting the compiler insert 2 anonymous bytes, keeping the "no padding" property structural.
+    // Explicit tail padding, sized so the header has NO implicit padding (asserted below). The
+    // erased FrameFormat used to be the uint16 that paired with `flags`; `reserved` takes that slot
+    // rather than letting the compiler insert 2 anonymous bytes, keeping the "no padding" property
+    // structural.
     std::uint16_t reserved{0};
 };
 
@@ -120,10 +122,11 @@ using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
 
 static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
 static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
-// The header is memcpy'd across a process boundary, so implicit padding would put INDETERMINATE bytes
-// on the wire — unreadable to a consumer that ever inspected them, and a bit-identity hazard for
-// anything that hashes a frame. `reserved` exists to make the property hold structurally; this asserts
-// it stays true, so a future field that reintroduces a hole fails the build instead of shipping.
+// The header is memcpy'd across a process boundary, so implicit padding would put INDETERMINATE
+// bytes on the wire — unreadable to a consumer that ever inspected them, and a bit-identity hazard
+// for anything that hashes a frame. `reserved` exists to make the property hold structurally; this
+// asserts it stays true, so a future field that reintroduces a hole fails the build instead of
+// shipping.
 static_assert(std::has_unique_object_representations_v<LineFrameHeader>,
               "LineFrameHeader has implicit padding — size the trailing `reserved` field so the "
               "members tile the struct exactly (an IPC header is memcpy'd; padding bytes are "
@@ -146,8 +149,8 @@ inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CR
 inline constexpr std::uint32_t kSharedChannelAbiVersion{5U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
-// Capacity of SharedChannelHeader::intent_channel, including the NUL terminator. A channel name is a
-// short package-declared identifier ("annotated", "stripped"); 32 leaves generous headroom while
+// Capacity of SharedChannelHeader::intent_channel, including the NUL terminator. A channel name is
+// a short package-declared identifier ("annotated", "stripped"); 32 leaves generous headroom while
 // keeping the header a fixed-layout POD. A longer name is REFUSED at open (never truncated — a
 // truncated name would either fail the consumer's vocabulary check far from its cause, or, worse,
 // silently alias another declared name).
@@ -206,20 +209,20 @@ struct ChannelConfig
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
     bool unlink_before_create{true};
     bool unlink_on_destroy{false};
-    // The declared underlying IntentChannel this ring TRANSPORTS (ADR 0029 D3). Set by the producer at
-    // create(); the consumer reads it back off the header at open(). Empty = Unspecified (the producer
-    // did not declare), which is every non-dialect stream.
+    // The declared underlying IntentChannel this ring TRANSPORTS (ADR 0029 D3). Set by the producer
+    // at create(); the consumer reads it back off the header at open(). Empty = Unspecified (the
+    // producer did not declare), which is every non-dialect stream.
     //
-    // Spelled in FULL, never bare `channel`: `name` above is this ring, and `channel` in this namespace
-    // means the ring throughout. The collision is not an accident to hide but the structure to state —
-    // the SHM channel CONTAINS an IntentChannel.
+    // Spelled in FULL, never bare `channel`: `name` above is this ring, and `channel` in this
+    // namespace means the ring throughout. The collision is not an accident to hide but the
+    // structure to state — the SHM channel CONTAINS an IntentChannel.
     //
-    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR 0029 D2): the channel is
-    // EXTRINSIC. No byte carries it — a prose line is byte-identical across channels, which is exactly
-    // why it must be declared and cannot be recovered. So SHM FORWARDS the producer's declaration
-    // rather than inventing an answer, leaving the SHM path and the real `--channel` path equally
-    // informed. That is not a cheat. A format tag would be: the bytes carry the format, so handing it
-    // over would privilege this path over the real one.
+    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR 0029 D2): the channel
+    // is EXTRINSIC. No byte carries it — a prose line is byte-identical across channels, which is
+    // exactly why it must be declared and cannot be recovered. So SHM FORWARDS the producer's
+    // declaration rather than inventing an answer, leaving the SHM path and the real `--channel`
+    // path equally informed. That is not a cheat. A format tag would be: the bytes carry the
+    // format, so handing it over would privilege this path over the real one.
     std::string intent_channel;
 };
 
@@ -315,13 +318,13 @@ struct SharedChannelHeader
 
     // --- the transported IntentChannel (ADR 0029 D3) ---
     // The declared underlying IntentChannel of the stream this ring carries, NUL-terminated ASCII;
-    // all-zero = Unspecified. CHANNEL-LEVEL, deliberately never per-frame: one IntentChannel per TREE
-    // is the contract, and a per-frame field would *permit* the multi-channel tree that contract
-    // forbids — as well as paying bytes per line for a fact that is constant per stream.
+    // all-zero = Unspecified. CHANNEL-LEVEL, deliberately never per-frame: one IntentChannel per
+    // TREE is the contract, and a per-frame field would *permit* the multi-channel tree that
+    // contract forbids — as well as paying bytes per line for a fact that is constant per stream.
     //
     // Written once by the producer at create(), read once by the consumer at open(): a cold,
-    // header-only fact, out of the frame path entirely. It sits with slot_count/slot_size (the other
-    // create-time identity fields), not on a cache line with the hot cursors.
+    // header-only fact, out of the frame path entirely. It sits with slot_count/slot_size (the
+    // other create-time identity fields), not on a cache line with the hot cursors.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
     // --- atomic control plane (isolated cache lines) ---
@@ -437,7 +440,7 @@ class AdaptiveWait
     std::uint64_t loops_{0};
 };
 
-} // namespace coderoast::ipc (module-local, non-exported)
+} // namespace coderoast::ipc
 
 // ── Public surface: the shared-memory SPSC channel (uses detail) ─────────────
 export namespace coderoast::ipc
@@ -492,14 +495,14 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             throw std::invalid_argument("IPC slot_count must be greater than zero");
         }
 
-        // REFUSED, never truncated (ADR 0029 D3): a clipped channel name would reach the consumer as a
-        // different string — failing its vocabulary check far from the cause, or in the worst case
-        // aliasing another declared name and silently mis-gating recognition.
+        // REFUSED, never truncated (ADR 0029 D3): a clipped channel name would reach the consumer
+        // as a different string — failing its vocabulary check far from the cause, or in the worst
+        // case aliasing another declared name and silently mis-gating recognition.
         if (config.intent_channel.size() >= kIntentChannelNameCapacity)
         {
             throw std::invalid_argument("IPC intent_channel name exceeds " +
-                                        std::to_string(kIntentChannelNameCapacity - 1U) + " bytes: '" +
-                                        config.intent_channel + "'");
+                                        std::to_string(kIntentChannelNameCapacity - 1U) +
+                                        " bytes: '" + config.intent_channel + "'");
         }
 
         SharedMemorySpscChannel channel;
@@ -521,9 +524,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         auto* header{new (channel.mapping_) SharedChannelHeader{}};
         header->slot_count = config.slot_count;
         header->slot_size = sizeof(Frame);
-        // Forward the producer's DECLARATION (ADR 0029 D3) — the ring encapsulates an IntentChannel, so
-        // it must say which. The array is value-initialised, so an empty declaration stays all-zero =
-        // Unspecified, and the copy leaves the NUL terminator in place (size < capacity, checked above).
+        // Forward the producer's DECLARATION (ADR 0029 D3) — the ring encapsulates an
+        // IntentChannel, so it must say which. The array is value-initialised, so an empty
+        // declaration stays all-zero = Unspecified, and the copy leaves the NUL terminator in place
+        // (size < capacity, checked above).
         std::memcpy(header->intent_channel.data(), config.intent_channel.data(),
                     config.intent_channel.size());
         channel.header_ = header;
@@ -550,10 +554,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return channel;
     }
 
-    // The declared underlying IntentChannel this ring transports (ADR 0029 D3). Empty = Unspecified:
-    // the producer did not declare, so a consumer must not claim dialect depth from this stream — the
-    // same fail-closed-on-DEPTH posture as an undeclared `--channel`. Read off the header, so a
-    // consumer never has to be told out-of-band what it is already carrying.
+    // The declared underlying IntentChannel this ring transports (ADR 0029 D3). Empty =
+    // Unspecified: the producer did not declare, so a consumer must not claim dialect depth from
+    // this stream — the same fail-closed-on-DEPTH posture as an undeclared `--channel`. Read off
+    // the header, so a consumer never has to be told out-of-band what it is already carrying.
     [[nodiscard]] std::string_view intent_channel() const noexcept
     {
         if (header_ == nullptr)

@@ -54,9 +54,9 @@ template <typename Frame = DefaultLineFrame> class FrameBuilder
     // timestamp, payload_size, agent ID, and frame flags.
     // Returns the assembled frame with populated header.
     //
-    // Takes no format: the IntentFormat is intrinsic to the payload bytes and canon recovers it from
-    // them (ADR 0029 D2 — see coderoast.ipc.core). A producer that could stamp the format here would
-    // be handing the consumer an answer no real log carries.
+    // Takes no format: the IntentFormat is intrinsic to the payload bytes and canon recovers it
+    // from them (ADR 0029 D2 — see coderoast.ipc.core). A producer that could stamp the format here
+    // would be handing the consumer an answer no real log carries.
     [[nodiscard]] Frame build(std::uint32_t shard_id, std::uint64_t timestamp_unix_ns,
                               std::uint32_t payload_size, std::uint32_t agent_id_hash,
                               LineFrameFlags flags = LineFrameFlags{}) noexcept

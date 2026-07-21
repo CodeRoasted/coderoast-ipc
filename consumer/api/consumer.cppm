@@ -489,7 +489,6 @@ class ShmTransportDrainer
 
 // ─────────── from causal_reorder_buffer.hpp ───────────
 
-
 /// **Step 2 of the pull-based causal SHM consumer pipeline.**
 ///
 /// Owns a per-shard CausalKey min-heap and runs a k-way merge over the

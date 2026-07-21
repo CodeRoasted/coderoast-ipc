@@ -144,9 +144,9 @@ TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSe
     for (std::size_t index{0}; index < kPushOrder.size(); ++index)
     {
         const auto shard{kPushOrder[index]};
-        (void)producers.producers[shard].push(
-            make_frame(static_cast<std::uint64_t>(index) + 1U, shard, "", /*tick=*/kSealTick, 0, 0,
-                       Flags::kLineFrameFlagWindowSeal));
+        (void)producers.producers[shard].push(make_frame(static_cast<std::uint64_t>(index) + 1U,
+                                                         shard, "", /*tick=*/kSealTick, 0, 0,
+                                                         Flags::kLineFrameFlagWindowSeal));
     }
 
     std::vector<std::uint32_t> emitted_shards;
@@ -159,9 +159,8 @@ TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSe
         }
     }
 
-    ASSERT_EQ(emitted_shards.size(), kShards)
-        << "expected every shard's seal to surface; got " << emitted_shards.size() << "/"
-        << kShards;
+    ASSERT_EQ(emitted_shards.size(), kShards) << "expected every shard's seal to surface; got "
+                                              << emitted_shards.size() << "/" << kShards;
     EXPECT_EQ(emitted_shards, (std::vector<std::uint32_t>{0U, 1U, 2U}))
         << "seal emission order followed the transport sequence, not the causal key — the "
            "reconciled stream is no longer a deterministic byte sequence";

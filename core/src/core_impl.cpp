@@ -97,4 +97,4 @@ void shm_unlink_name(const char* name) noexcept
     (void)::shm_unlink(name);
 }
 
-} // namespace coderoast::ipc (module-local, non-exported)
+} // namespace coderoast::ipc
