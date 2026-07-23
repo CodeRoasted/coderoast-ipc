@@ -134,15 +134,15 @@ static_assert(std::has_unique_object_representations_v<LineFrameHeader>,
 
 // Concept satisfied by LineFrame<N> (and any user type with the same header layout).
 template <typename F>
-concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& f) {
-    { f.header.sequence } -> std::convertible_to<std::uint64_t>;
-    { f.header.logical_tick } -> std::convertible_to<std::uint64_t>;
-    { f.header.timestamp_unix_ns } -> std::convertible_to<std::uint64_t>;
-    { f.header.agent_order } -> std::convertible_to<std::uint32_t>;
-    { f.header.intra_agent_index } -> std::convertible_to<std::uint32_t>;
-    { f.header.shard_id } -> std::convertible_to<std::uint32_t>;
-    { f.header.flags };
-    { f.header.payload_size } -> std::convertible_to<std::uint32_t>;
+concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) {
+    { frame.header.sequence } -> std::convertible_to<std::uint64_t>;
+    { frame.header.logical_tick } -> std::convertible_to<std::uint64_t>;
+    { frame.header.timestamp_unix_ns } -> std::convertible_to<std::uint64_t>;
+    { frame.header.agent_order } -> std::convertible_to<std::uint32_t>;
+    { frame.header.intra_agent_index } -> std::convertible_to<std::uint32_t>;
+    { frame.header.shard_id } -> std::convertible_to<std::uint32_t>;
+    { frame.header.flags };
+    { frame.header.payload_size } -> std::convertible_to<std::uint32_t>;
 };
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
