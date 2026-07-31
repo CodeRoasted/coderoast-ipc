@@ -445,7 +445,7 @@ advance the CONSUMER's read cursor, which breaks the single-writer-per-variable 
 an SPSC ring rests on: with a full ring `write % slot_count == read % slot_count`, so the
 producer's write targets exactly the slot the consumer is reading. Making it sound needs
 per-slot sequence numbers plus a validation re-read on the hot path — see
-`technical_docs/adr/0033` in the superproject.
+`technical_docs/adr/011-insight-ipc-bus-and-ordering.md` in the superproject.
 
 ### Wait Strategies
 
