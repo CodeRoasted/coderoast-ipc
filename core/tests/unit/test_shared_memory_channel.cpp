@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.core.test; // std + the facade (§11.9.11 aggregate)
+import coderoast.ipc.core.test; // std + the facade (ADR-3.D4 aggregate)
 
 namespace
 {

@@ -1,4 +1,4 @@
-// coderoast.ipc.core — implementation unit (1.5.1 unwrap, §11.9 cascade rule).
+// coderoast.ipc.core — implementation unit (ADR-3.D4 cascade rule).
 //
 // The POSIX shared-memory syscalls touch C MACROS (errno, O_*, PROT_*, MAP_*) that cannot live in
 // the BMI-producing module INTERFACE (.cppm) — so they live HERE, in an implementation unit (a

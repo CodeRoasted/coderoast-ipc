@@ -9,7 +9,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (§11.9.11 aggregate)
+import coderoast.ipc.consumer.test; // std + the facade + core (ADR-3.D4 aggregate)
 
 #include "causal_pipeline_test_harness.hpp"
 

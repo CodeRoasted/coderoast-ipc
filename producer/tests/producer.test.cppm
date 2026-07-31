@@ -1,6 +1,6 @@
-// coderoast.ipc.producer.test — shared test infrastructure (§11.9.11, the logcraft.test
+// coderoast.ipc.producer.test — shared test infrastructure (ADR-3.D4, the logcraft.test
 // pattern). Test TUs import this instead of spelling out the import block. ipc.producer is a
-// SINGLE module (the §11.9.11 sizing rule; see the package CMake note); the aggregate
+// SINGLE module (the ADR-3.D4 sizing rule; see the package CMake note); the aggregate
 // re-exports std + the facade + the upstream core module the tests exercise.
 export module coderoast.ipc.producer.test;
 export import std;

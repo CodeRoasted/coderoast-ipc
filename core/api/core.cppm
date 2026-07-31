@@ -2,14 +2,14 @@
 // former api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via
 // `import std`.
 //
-// §11.9 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*, PROT_*,
+// ADR-3.D4 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*, PROT_*,
 // MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so a
 // textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
 // every syscall
 // + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import
 // std); this interface holds only the non-template `shm_*` declarations, crossing the
 // boundary with primitives only (int/size_t/void*/const char*) — no std class type unifies across
-// import-std↔textual. detail is a SEALED non-export namespace (§11.9): consumers get the public
+// import-std↔textual. detail is a SEALED non-export namespace (ADR-3.D4): consumers get the public
 // surface, not the helpers.
 export module coderoast.ipc.core;
 import std;
@@ -242,7 +242,7 @@ struct ChannelStats
 // NAMED namespace, NOT anonymous: these helpers are referenced by the INLINE channel
 // templates below, so a consumer instantiating those templates would expose them. An
 // anonymous namespace gives them TU-local linkage → "instantiation exposes TU-local entity"
-// under modules (§11.8/§11.9). `detail` (non-export) seals them from consumers while giving
+// under modules (ADR-3.D4). `detail` (non-export) seals them from consumers while giving
 // them module linkage. Do NOT let clang-tidy `misc-use-anonymous-namespace` revert this.
 namespace coderoast::ipc
 {
@@ -282,7 +282,7 @@ inline constexpr std::size_t kCacheLineBytes{64U};
 
 // ── POSIX shm syscall wrappers — DEFINED in coderoast_ipc_core_impl.cpp ──────
 // Each owns one syscall + its C macros (errno, O_*, PROT_*, MAP_*) which cannot
-// live in this import-std interface (§11.9 cascade rule, see file header). The
+// live in this import-std interface (ADR-3.D4 cascade rule, see file header). The
 // boundary crosses primitives only; the throwing ones raise std::runtime_error
 // built inside the impl unit. fd helpers return a VALID descriptor or throw.
 [[nodiscard]] int shm_open_create(const char* name);
