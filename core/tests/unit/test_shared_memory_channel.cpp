@@ -69,7 +69,7 @@ TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
-// ── The transported IntentChannel (ADR 0029 D3) ────────────────────────────────────────────────
+// ── The transported IntentChannel (ADR-22) ─────────────────────────────────────────────────────
 // The ring ENCAPSULATES an IntentChannel: the producer declares it at create(), the consumer reads
 // it off the header at open(). This is the seam that lets the SHM path be exactly as informed as
 // the real
@@ -91,7 +91,7 @@ TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
         << "the consumer must recover the producer's DECLARED IntentChannel off the header — "
            "without "
            "it the SHM path would have to guess the materialization, which is the one thing a "
-           "consumer must never do (ADR 0029 D2)";
+           "consumer must never do (ADR-22)";
 
     producer.close();
     consumer.close();

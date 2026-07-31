@@ -30,7 +30,7 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 // Member `+=` (extern-instantiated in libstdc++), NOT the free `operator+(std::string&&,
 // const char*)`: gcc-15 + `import std` does not emit that inline rvalue overload in a pure-module
 // TU, so a downstream pure-module target (the insight_e2e SHM bench) links it undefined.
-// See [[gcc15-and-cxx-modules]] / ADR 0015.
+// See [[gcc15-and-cxx-modules]] / ADR-3.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
@@ -39,7 +39,7 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
     return name;
 }
 
-// ── Why there is no `FrameFormat` here (ADR 0029 D2) ────────────────────────
+// ── Why there is no `FrameFormat` here (ADR-22) ─────────────────────────────
 // A per-line IntentFormat tag USED to ride this header. It was erased, and the rule that erased it
 // governs every future field on this transport:
 //
@@ -209,7 +209,7 @@ struct ChannelConfig
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
     bool unlink_before_create{true};
     bool unlink_on_destroy{false};
-    // The declared underlying IntentChannel this ring TRANSPORTS (ADR 0029 D3). Set by the producer
+    // The declared underlying IntentChannel this ring TRANSPORTS (ADR-22). Set by the producer
     // at create(); the consumer reads it back off the header at open(). Empty = Unspecified (the
     // producer did not declare), which is every non-dialect stream.
     //
@@ -217,7 +217,7 @@ struct ChannelConfig
     // namespace means the ring throughout. The collision is not an accident to hide but the
     // structure to state — the SHM channel CONTAINS an IntentChannel.
     //
-    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR 0029 D2): the channel
+    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR-22): the channel
     // is EXTRINSIC. No byte carries it — a prose line is byte-identical across channels, which is
     // exactly why it must be declared and cannot be recovered. So SHM FORWARDS the producer's
     // declaration rather than inventing an answer, leaving the SHM path and the real `--channel`
@@ -316,7 +316,7 @@ struct SharedChannelHeader
     std::uint64_t slot_count{0};
     std::uint64_t slot_size{0};
 
-    // --- the transported IntentChannel (ADR 0029 D3) ---
+    // --- the transported IntentChannel (ADR-22) ---
     // The declared underlying IntentChannel of the stream this ring carries, NUL-terminated ASCII;
     // all-zero = Unspecified. CHANNEL-LEVEL, deliberately never per-frame: one IntentChannel per
     // TREE is the contract, and a per-frame field would *permit* the multi-channel tree that
@@ -495,7 +495,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             throw std::invalid_argument("IPC slot_count must be greater than zero");
         }
 
-        // REFUSED, never truncated (ADR 0029 D3): a clipped channel name would reach the consumer
+        // REFUSED, never truncated (ADR-22): a clipped channel name would reach the consumer
         // as a different string — failing its vocabulary check far from the cause, or in the worst
         // case aliasing another declared name and silently mis-gating recognition.
         if (config.intent_channel.size() >= kIntentChannelNameCapacity)
@@ -524,7 +524,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         auto* header{new (channel.mapping_) SharedChannelHeader{}};
         header->slot_count = config.slot_count;
         header->slot_size = sizeof(Frame);
-        // Forward the producer's DECLARATION (ADR 0029 D3) — the ring encapsulates an
+        // Forward the producer's DECLARATION (ADR-22) — the ring encapsulates an
         // IntentChannel, so it must say which. The array is value-initialised, so an empty
         // declaration stays all-zero = Unspecified, and the copy leaves the NUL terminator in place
         // (size < capacity, checked above).
@@ -554,7 +554,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return channel;
     }
 
-    // The declared underlying IntentChannel this ring transports (ADR 0029 D3). Empty =
+    // The declared underlying IntentChannel this ring transports (ADR-22). Empty =
     // Unspecified: the producer did not declare, so a consumer must not claim dialect depth from
     // this stream — the same fail-closed-on-DEPTH posture as an undeclared `--channel`. Read off
     // the header, so a consumer never has to be told out-of-band what it is already carrying.
