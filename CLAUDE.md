@@ -19,5 +19,6 @@ versioned together (`packages.yml`): `coderoast_ipc_core` / `_producer` /
   embed anywhere.
 - The frame layout and ABI constants are a WIRE CONTRACT: `logcraft_core` on
   the producer side, insight-eidos's mcp/e2e on the consumer side. An ABI
-  change cascades — fix all consumers in the same pass; the consumer list is in
-  `../technical_docs/compatibility_matrix.md`.
+  change cascades — fix all consumers in the same pass; the consumer list is the
+  superproject's `technical_docs/compatibility_matrix.md` (present only in a
+  full workspace checkout).
