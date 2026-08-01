@@ -1,7 +1,7 @@
 // NOLINTBEGIN : Unit tests may intentionally violate some style rules for clarity or simplicity.
 #include <gtest/gtest.h>
 
-import coderoast.ipc.producer.test; // std + the facade + core (ADR-3.D4 aggregate)
+import coderoast.ipc.producer.test; // std + the facade + core (the test aggregate)
 
 using FrameBuilder = coderoast::ipc::producer::FrameBuilder<>;
 

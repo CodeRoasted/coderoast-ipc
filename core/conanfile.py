@@ -27,7 +27,7 @@ class CodeRoastIpcCoreConan(ConanFile):
         # Keyed editable build dir: malf sets the env (all profiles incl. sanitizer); a RAW
         # `conan create --profile X` instead reads it from the profile [conf] → a consumer under
         # ANY profile links THIS dep's matching-profile build, not the libc++-default build/
-        # ([[malf-build-type-isolation]] keying gap).
+        # (the build-type keying gap).
         build_dir = (os.environ.get("MALF_EDITABLE_BUILD_DIR")
                      or self.conf.get("user.malf:editable_build_dir", default="build"))
         self.cpp.build.libdirs = [build_dir]

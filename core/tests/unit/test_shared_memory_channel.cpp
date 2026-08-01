@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.core.test; // std + the facade (ADR-3.D4 aggregate)
+import coderoast.ipc.core.test; // std + the facade (the test aggregate)
 
 namespace
 {
@@ -89,9 +89,8 @@ TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
     auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
     EXPECT_EQ(consumer.intent_channel(), "annotated")
         << "the consumer must recover the producer's DECLARED IntentChannel off the header — "
-           "without "
-           "it the SHM path would have to guess the materialization, which is the one thing a "
-           "consumer must never do (ADR-22)";
+           "without it the SHM path would have to guess the materialization, which is the one "
+           "thing a consumer must never do";
 
     producer.close();
     consumer.close();

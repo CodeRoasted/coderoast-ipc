@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (ADR-3.D4 aggregate)
+import coderoast.ipc.consumer.test; // std + the facade + core (the test aggregate)
 
 #include "causal_pipeline_test_harness.hpp"
 

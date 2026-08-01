@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (ADR-3.D4 aggregate)
+import coderoast.ipc.consumer.test; // std + the facade + core (the test aggregate)
 
 #include "causal_pipeline_test_harness.hpp"
 
@@ -124,9 +124,9 @@ TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
 //
 // This regression pins that. It is arranged so it can FAIL: the shards are pushed in the order
 // 2, 0, 1, so their global `header.sequence` values (1, 2, 3) run OPPOSITE to shard_id. The
-// comparator previously consulted `header.sequence` — the cross-shard racing counter named in
-// CLAUDE.md's determinism carve-out — before ever reaching shard_id, which made the emitted seal
-// order follow the transport race instead of the causal key. Under that comparator this test
+// comparator previously consulted `header.sequence` — the cross-shard racing counter the
+// determinism carve-out puts off-limits — before ever reaching shard_id, which made the emitted
+// seal order follow the transport race instead of the causal key. Under that comparator this test
 // yields {2, 0, 1}; under the current one it yields {0, 1, 2}.
 //
 // Note this asserts the ORDER, unlike the tail-drain test above, which sorts first because its

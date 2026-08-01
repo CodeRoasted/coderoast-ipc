@@ -30,7 +30,7 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 // Member `+=` (extern-instantiated in libstdc++), NOT the free `operator+(std::string&&,
 // const char*)`: gcc-15 + `import std` does not emit that inline rvalue overload in a pure-module
 // TU, so a downstream pure-module target (the insight_e2e SHM bench) links it undefined.
-// See [[gcc15-and-cxx-modules]] / ADR-3.
+// See ADR-3.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
