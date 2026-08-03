@@ -2,9 +2,9 @@
 // former api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via
 // `import std`.
 //
-// ADR-3.D4 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*, PROT_*,
-// MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so a
-// textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
+// ADR-3.D4 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*,
+// PROT_*, MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so
+// a textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
 // every syscall
 // + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import
 // std); this interface holds only the non-template `shm_*` declarations, crossing the
