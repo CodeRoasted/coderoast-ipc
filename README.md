@@ -50,14 +50,14 @@ cd coderoast-ipc
 
 # Build all three packages into local .conan2 cache
 conan create . \
-  --profile:host=.conan2/profiles/linux-gcc15-release \
-  --profile:build=.conan2/profiles/linux-gcc15-release \
+  --profile:host=.conan2/profiles/linux-gcc16-release \
+  --profile:build=.conan2/profiles/linux-gcc16-release \
   --build=missing \
   --build-test=missing
 ```
 
 **What this does:**
-- Detects profile at `.conan2/profiles/linux-gcc15-release`
+- Detects profile at `.conan2/profiles/linux-gcc16-release`
 - Builds/tests core, consumer, and producer packages
 - Stores packages in local `.conan2` cache
 - Exits with status 0 on success
@@ -69,20 +69,20 @@ If you only need specific packages:
 ```bash
 # Build core only
 conan create core \
-  --profile:host=.conan2/profiles/linux-gcc15-release \
-  --profile:build=.conan2/profiles/linux-gcc15-release \
+  --profile:host=.conan2/profiles/linux-gcc16-release \
+  --profile:build=.conan2/profiles/linux-gcc16-release \
   --build=missing
 
 # Build consumer (automatically pulls core dependency)
 conan create consumer \
-  --profile:host=.conan2/profiles/linux-gcc15-release \
-  --profile:build=.conan2/profiles/linux-gcc15-release \
+  --profile:host=.conan2/profiles/linux-gcc16-release \
+  --profile:build=.conan2/profiles/linux-gcc16-release \
   --build=missing
 
 # Build producer (automatically pulls core dependency)
 conan create producer \
-  --profile:host=.conan2/profiles/linux-gcc15-release \
-  --profile:build=.conan2/profiles/linux-gcc15-release \
+  --profile:host=.conan2/profiles/linux-gcc16-release \
+  --profile:build=.conan2/profiles/linux-gcc16-release \
   --build=missing
 ```
 
@@ -246,8 +246,8 @@ For iterative development without Conan:
 conan install . \
   --output-folder=build \
   --build=missing \
-  --profile:host=.conan2/profiles/linux-gcc15-release \
-  --profile:build=.conan2/profiles/linux-gcc15-release \
+  --profile:host=.conan2/profiles/linux-gcc16-release \
+  --profile:build=.conan2/profiles/linux-gcc16-release \
   -s build_type=Debug
 
 # Build with CMake
@@ -286,8 +286,8 @@ After bumping version or changing ABI, export to the shared cache where downstre
 ```bash
 # Export all three packages to /opt/coderoast/conan-stable
 CONAN_HOME=/opt/coderoast/conan-stable conan create . \
-  --profile:host=linux-gcc15-release \
-  --profile:build=linux-gcc15-release \
+  --profile:host=linux-gcc16-release \
+  --profile:build=linux-gcc16-release \
   --build=missing
 ```
 
@@ -327,11 +327,11 @@ conan cache restore coderoast_ipc-X.Y.Z.tgz
 
 ### Profile not found
 
-If you get `profile 'linux-gcc15-release' does not exist`, ensure it's created:
+If you get `profile 'linux-gcc16-release' does not exist`, ensure it's created:
 
 ```bash
 conan profile detect --force
-# Then copy/customize as needed to .conan2/profiles/linux-gcc15-release
+# Then copy/customize as needed to .conan2/profiles/linux-gcc16-release
 ```
 
 ### Cannot find gtest or benchmark
