@@ -315,7 +315,7 @@ conan cache restore coderoast_ipc-X.Y.Z.tgz
 ## Requirements
 
 - **OS:** Linux (macOS/Windows support possible with POSIX shim)
-- **C++ Standard:** C++23 with modules + `import std` (compilers: GCC 15 / libstdc++, Clang 21 / libc++)
+- **C++ Standard:** C++23 with modules + `import std` (compilers: GCC 16 / libstdc++, Clang 21 / libc++)
 - **Build System:** CMake with `CMakeConfigDeps` + Ninja (a recent CMake with C++20-module + `import std` support)
 - **Package Manager:** Conan 2.x
 - **Runtime Dependencies:** None (small static library, no third-party runtime deps)
