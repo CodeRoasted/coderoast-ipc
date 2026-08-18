@@ -97,47 +97,44 @@ Shared-memory single-producer-single-consumer queue:
 ```cpp
 import coderoast.ipc.core;
 
-using namespace coderoast::ipc;
+using Channel = coderoast::ipc::SharedMemorySpscChannel<coderoast::ipc::DefaultLineFrame>;
 
-// Configure channel
-ChannelConfig cfg{
+// Producer side — create() owns the segment and names it.
+auto producer{Channel::create(coderoast::ipc::ChannelConfig{
     .name = "myapp.pipeline",
     .slot_count = 8192,
-    .backpressure = BackpressurePolicy::DropNewest,
-};
+    .backpressure = coderoast::ipc::BackpressurePolicy::DropNewest,
+})};
 
-// Sender side
-SharedMemoryChannel<DefaultLineFrame> sender{cfg};
-{
-    auto [frame, acquired] = sender.try_acquire_write();
-    if (acquired) {
-        frame->header.sequence = 42;
-        frame->header.timestamp_unix_ns = std::chrono::system_clock::now().time_since_epoch().count();
-        std::memcpy(frame->payload.data(), "log line", 8);
-        frame->header.payload_size = 8;
-        sender.commit_write();
-    }
+coderoast::ipc::DefaultLineFrame frame{};
+frame.header.sequence = 42;
+frame.header.payload_size = 8;
+std::memcpy(frame.payload.data(), "log line", 8);
+// push()/try_push()/try_pop() are all [[nodiscard]] — the result is the backpressure answer.
+const bool sent{producer.push(frame)};   // false = channel closed, or dropped under DropNewest
+
+// Consumer side — open() attaches to an existing segment by name and never
+// drives a state transition on destruction.
+auto consumer{Channel::open("myapp.pipeline")};
+
+coderoast::ipc::DefaultLineFrame out{};
+if (consumer.try_pop(out)) {
+    std::cout << "Seq: " << out.header.sequence << "\n";
+    std::cout << "Payload: " << std::string_view(
+        reinterpret_cast<const char*>(out.payload.data()),
+        out.header.payload_size) << "\n";
 }
 
-// Receiver side
-SharedMemoryChannel<DefaultLineFrame> receiver{
-    ChannelConfig{.name = "myapp.pipeline", .unlink_before_create = false}
-};
-{
-    auto [frame, acquired] = receiver.try_acquire_read();
-    if (acquired) {
-        std::cout << "Seq: " << frame->header.sequence << "\n";
-        std::cout << "Payload: " << std::string_view(
-            reinterpret_cast<const char*>(frame->payload.data()),
-            frame->header.payload_size) << "\n";
-        receiver.commit_read();
-    }
-}
+Channel::unlink("myapp.pipeline");   // remove the named segment
 ```
 
+*Frames are passed **by value**: `push`/`try_pop` copy a whole `Frame` in and out. There is
+no acquire/commit slot-borrow API — the same shape is exercised in
+`core/tests/unit/test_shared_memory_channel.cpp`, which is what makes this snippet compile.*
+
 **Key Types:**
-- `SharedMemoryChannel<Frame>` - SPSC queue template
-- `DefaultLineFrame` - 4KB payload frames (customizable)
+- `SharedMemorySpscChannel<Frame>` - SPSC queue template; `create()` / `open()` / `unlink()`
+- `DefaultLineFrame` - 4KB payload frames (`LineFrame<N>` for another size)
 - `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
 - `BackpressurePolicy` - Block, DropNewest
 - `WaitStrategy` - Spin, SpinYield, Adaptive, AdaptivePark, ParkOnly
@@ -399,7 +396,7 @@ build.
 
 ABI version constants ensure compatibility:
 - `kIpcAbiVersion = 3`
-- `kSharedChannelAbiVersion = 3`
+- `kSharedChannelAbiVersion = 5`
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
 should reconstruct canonical order with `(logical_tick, agent_order,
