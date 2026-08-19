@@ -514,8 +514,9 @@ class ShmTransportDrainer
 ///
 /// **Determinism contract**
 ///   * Output is deterministic given identical drainer input. Ties are
-///     broken by `(logical_tick, agent_order, intra_agent_index, sequence)`
-///     in that order, which is a total order.
+///     broken by `(logical_tick, agent_order, intra_agent_index, shard_id)`
+///     in that order, which is a total order (`causal_less`; `header.sequence`
+///     is the race-assigned carve-out field and is deliberately not consulted).
 ///   * The frontier gate guarantees no late frame from any non-EOS shard
 ///     can be "passed" by a later frame from another shard.
 ///
@@ -1126,8 +1127,10 @@ class CausalShmConsumer
 ///   this invariant.
 /// * Two replays of the same scenario emit a byte-identical sequence of
 ///   `WindowClosed` events (1 per window, with deterministic `(window_id,
-///   logical_tick)`). Data-frame order between events still depends on
-///   inter-shard SHM scheduling and remains a deterministic multiset.
+///   logical_tick)`). Data-frame order between events is likewise
+///   byte-deterministic: those frames are post-merge, and `causal_less`'s
+///   `shard_id` tie-break lifts the merge from a deterministic multiset to a
+///   deterministic byte sequence (see `CausalKey`).
 ///
 /// Single-thread, allocation-free hot path
 /// ---------------------------------------
