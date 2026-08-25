@@ -8,4 +8,4 @@ on:
 
 jobs:
   lint:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@63fb55b5b69fdf3f2a3f514d573f6196c13f41ba
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@27d2f7bcaa4116a626ab85b1d4df80f06f24ec48
