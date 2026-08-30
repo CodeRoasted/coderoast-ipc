@@ -11,7 +11,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-ci.yml@6831b5ad9d4b150b441ee328a157b54b369cfae8
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-ci.yml@86da82aa1bd66823723eb6a9c3fcb1fdf91a8ae1
     with:
       # ipc is a tower root (no first-party deps to vendor). Root meta-package first, then the three
       # sub-packages; each gates its unit tests behind a -D flag, passed as trailing cmake-args.
@@ -35,7 +35,7 @@ jobs:
     permissions:
       pull-requests: write
       actions: read
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-sift-post.yml@6831b5ad9d4b150b441ee328a157b54b369cfae8
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-sift-post.yml@86da82aa1bd66823723eb6a9c3fcb1fdf91a8ae1
     with:
       run-id: ${{ github.run_id }}
     secrets: inherit
