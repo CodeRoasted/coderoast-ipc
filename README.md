@@ -173,7 +173,7 @@ sealed by every shard" — wrap the consumer in `WindowClosedConsumer<Frame>`
 legacy `OrderedLineFrameIterator` / `SharedMemorySource` pair was removed once
 every caller turned out to be using `FrameOrdering::CausalKey` already, so the
 "raw transport-sequence access" they were retained for had no referent
-(ADR 0033).
+(`ADR-11.D3`).
 
 **Key features:**
 - Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`
@@ -382,9 +382,11 @@ struct LineFrame {
 };
 ```
 
-The header carries **no format tag**, by rule (ADR 0029 D2): *the transport carries exactly the facts
-the bytes cannot carry, and nothing they can.* The format is intrinsic — the payload bytes carry it and
-the consumer recovers it from them, exactly as it must for a real log that arrives with no frame header.
+The header carries **no format tag**, by rule: `ADR-11.D2` enumerates what the transport owns —
+FIFO, sequence and gap counters, frame layout, backpressure policy, channel count, the seal and
+end-of-stream markers — and a format tag is not on that list. The format is intrinsic: the payload
+bytes carry it and the consumer recovers it from them, exactly as it must for a real log that
+arrives with no frame header.
 A `FrameFormat format` field did ride here until 1.8.1; it had three writers and zero readers, and was
 erased as a latent cheat channel rather than left one `read` away from letting a generator hand the
 consumer an answer production never supplies.
