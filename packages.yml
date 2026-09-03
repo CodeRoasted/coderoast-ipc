@@ -2,18 +2,18 @@ packages:
   coderoast_ipc_core:
     path: core
     version: 1.10.4
-    public: true
+    source_public: true
     release: true
     depends: []
   coderoast_ipc_consumer:
     path: consumer
     version: 1.10.4
-    public: true
+    source_public: true
     release: true
     depends: [coderoast_ipc_core]
   coderoast_ipc_producer:
     path: producer
     version: 1.10.4
-    public: true
+    source_public: true
     release: true
     depends: [coderoast_ipc_core]
