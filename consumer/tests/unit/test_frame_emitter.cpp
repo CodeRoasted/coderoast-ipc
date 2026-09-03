@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Unit coverage for the FrameEmitter domain — step 3 of the pull-based causal
 // SHM consumer pipeline: the control-frame filter and its control_dropped
@@ -46,5 +45,3 @@ TEST(CausalShmConsumer, ControlFramesAreFilteredByDefault)
     EXPECT_EQ(emitted[1], "data2");
     EXPECT_EQ(consumer.emitter().control_dropped(), 1U);
 }
-
-// NOLINTEND : Unit tests intentionally favour clarity over style.

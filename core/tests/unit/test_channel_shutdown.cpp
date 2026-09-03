@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests may intentionally violate some style rules for clarity or simplicity.
 //
 // Channel-shutdown semantics for the v3 SharedMemorySpscChannel.
 //
@@ -293,5 +292,3 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
 
     Channel::unlink(name);
 }
-
-// NOLINTEND

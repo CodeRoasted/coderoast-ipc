@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Unit coverage for the CausalShmConsumer facade: end-to-end causal ordering
 // across shards with EOS, and the aggregate ConsumerMetrics snapshot across
@@ -92,5 +91,3 @@ TEST(ConsumerMetrics, FacadeAggregatesAllStages)
     EXPECT_EQ(metrics.emitter.last_sequence, 3U);
     EXPECT_GE(metrics.reorder.selects_succeeded, 3U); // 2 data + 1 seal
 }
-
-// NOLINTEND : Unit tests intentionally favour clarity over style.

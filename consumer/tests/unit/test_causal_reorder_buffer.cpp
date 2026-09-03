@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Unit coverage for CausalReorderBuffer — step 2 of the pull-based causal SHM
 // consumer pipeline: frontier gating (all-shards-produced, idle-shard, and the
@@ -248,5 +247,3 @@ TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
         static_cast<std::size_t>(std::count(events.begin(), events.end(), drain_complete))};
     EXPECT_EQ(count, 1U) << "kDrainComplete must fire exactly once";
 }
-
-// NOLINTEND : Unit tests intentionally favour clarity over style.

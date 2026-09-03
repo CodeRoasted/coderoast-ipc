@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Shared fixtures for the pull-based causal SHM consumer pipeline unit tests
 // (test_transport_drainer / test_causal_reorder_buffer / test_frame_emitter /
@@ -87,5 +86,3 @@ struct ProducerHarness
     ProducerHarness& operator=(ProducerHarness&&) = delete;
 };
 } // namespace
-
-// NOLINTEND : Unit tests intentionally favour clarity over style.

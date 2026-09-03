@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Coverage for the WindowClosedConsumer coalescing adapter.
 //
@@ -210,5 +209,3 @@ TEST(WindowClosedConsumer, DataFrameBeforeWindowClosedRespectsCausalOrder)
     EXPECT_EQ(pre_seal_data, kShardCount);
     EXPECT_EQ(post_seal_data, kShardCount);
 }
-
-// NOLINTEND

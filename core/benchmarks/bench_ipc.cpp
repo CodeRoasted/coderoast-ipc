@@ -1,5 +1,3 @@
-// NOLINTBEGIN : Benchmarks are not production code and may intentionally violate some style rules
-// for clarity or simplicity.
 #include <cstring> // ADR-3.D4 gcc-15 ICE: this TU calls std::memset (module-reachable) AND imports a
                    // first-party module (coderoast.ipc.core) — the combo ICEs the ealias pass
 // (nonnull_arg_p). A textual <cstring> gives mem* a canonical decl and dodges it;
@@ -69,5 +67,3 @@ int main(int argc, char** argv)
     benchmark::Shutdown();
     return 0;
 }
-// NOLINTEND : Benchmarks are not production code and may intentionally violate some style rules for
-// clarity or simplicity.

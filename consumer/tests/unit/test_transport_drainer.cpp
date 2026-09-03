@@ -1,4 +1,3 @@
-// NOLINTBEGIN : Unit tests intentionally favour clarity over style.
 //
 // Unit coverage for ShmTransportDrainer — step 1 of the pull-based causal SHM
 // consumer pipeline: EOS absorption, seal surfacing, transport_complete,
@@ -140,5 +139,3 @@ TEST(DrainerObserver, FiresOnShardEosTransition)
     EXPECT_EQ(eos_shards[0], 1U);
     EXPECT_EQ(eos_shards[1], 0U);
 }
-
-// NOLINTEND : Unit tests intentionally favour clarity over style.
