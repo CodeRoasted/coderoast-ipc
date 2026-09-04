@@ -1,15 +1,3 @@
-#include <cstring> // ADR-3.D4: this TU calls std::memset (module-reachable) AND imports a first-party
-                   // module (coderoast.ipc.core). On gcc-15 that combination ICEd the ealias pass
-// (nonnull_arg_p); a textual <cstring> gives mem* a canonical decl and dodges it, everything else
-// staying `import std`.
-//
-// RE-MEASURED 2026-09-03 with this include DELETED, wiped build tree, both legs: gcc-16.2
-// (`linux-gcc16-release`) and clang-21/libc++ (`linux-clang21-libcxx-release`) each compile and
-// link this TU clean. So the ICE does not reproduce on either shipped compiler, and "gcc-15" names
-// the version the defect was MET on, never a bound on where it lives. RETAINED anyway, per
-// ADR-3.D7: the measurement covers the two Linux legs at this commit and says nothing about the
-// MSVC leg, and the asymmetry is what decides — a wrong removal reds the ship leg at the tag,
-// a wrong retention costs one textual include.
 #include <unistd.h> // POSIX getpid() — not in import std
 
 #include <benchmark/benchmark.h>

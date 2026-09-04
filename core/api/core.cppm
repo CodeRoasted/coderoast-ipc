@@ -26,21 +26,6 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 // or they open different segments and the pipeline silently connects to nothing. That makes
 // this a contract, not a formatting helper — it lives here, in the module BOTH sides already
 // import, so the two ends cannot drift.
-//
-// Member `+=` (extern-instantiated in libstdc++), NOT the free `operator+(std::string&&,
-// const char*)`. THE SHAPE is the durable half: under `import std`, libstdc++ extern-instantiates
-// only the lvalue overloads, so a pure-module TU that chains `operator+` over temporaries can link
-// undefined in a downstream pure-module target (the insight_e2e SHM bench is where it landed).
-// First met on gcc-15. See ADR-3.
-//
-// RE-MEASURED 2026-09-03 on the gcc-16.2 ship leg (`linux-gcc16-release`), wiped build tree: this
-// function restored to `std::string{base} + "_shard_" + std::to_string(shard_id)`, together with
-// the three sibling sites in insight-e2e, and `insight_e2e_bench` — the very target the defect
-// used to break — LINKED CLEAN. So the overload IS emitted by the current ship compiler and the
-// shape is inert here today. RETAINED per ADR-3.D7: the measurement covers the gcc-16.2 leg at
-// this commit and not the MSVC leg, and the asymmetry decides — a wrong removal reds the ship leg
-// at the tag, a wrong retention costs one spelling. "gcc-15" was never a bound on where the
-// defect lives, only the compiler it was met on.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
