@@ -1,7 +1,6 @@
-// coderoast.ipc.producer.test — shared test infrastructure, on the logcraft.test
-// pattern. Test TUs import this instead of spelling out the import block. ipc.producer is a
-// SINGLE module (nothing sealed, no partition earns its keep; see the package CMake note); the
-// re-exports std + the facade + the upstream core module the tests exercise.
+// refs: ADR-3.D4, F-SRC-coderoast-ipc:producer/CMakeLists.txt
+// invariant: the package is one module with nothing sealed, so this aggregate re-exports the whole
+// facade and no partition is declared.
 export module coderoast.ipc.producer.test;
 export import std;
 export import coderoast.ipc.producer;

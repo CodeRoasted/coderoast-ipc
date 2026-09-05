@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-import coderoast.ipc.producer.test; // std + the facade + core (the test aggregate)
+import coderoast.ipc.producer.test;
 
 using FrameBuilder = coderoast::ipc::producer::FrameBuilder<>;
 

@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.core.test; // std + the facade (the test aggregate)
+import coderoast.ipc.core.test;
 
 namespace
 {
@@ -68,15 +68,7 @@ TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
-// ── The transported IntentChannel ──────────────────────────────────────────────────────────────
-// The ring ENCAPSULATES an IntentChannel: the producer declares it at create(), the consumer reads
-// it off the header at open(). This is the seam that lets the SHM path be exactly as informed as
-// the real
-// `--channel` path — no more (it forwards a declaration, it does not invent one) and no less (the
-// consumer never has to be told out-of-band what the stream already carries).
-//
-// It is CHANNEL-level, not per-frame, on purpose: one IntentChannel per TREE is the contract, and a
-// per-frame field would *permit* the multi-channel tree that contract forbids.
+// refs: ADR-22.D4
 TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
 {
     const auto name{unique_channel("intent_channel")};
@@ -96,9 +88,7 @@ TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
-// An undeclared ring reads back EMPTY = Unspecified — never a concrete channel. This is the
-// default, and it is what keeps every non-dialect stream (the ~20 pure formats) out of the blast
-// radius.
+// refs: ADR-22.D4, ADR-22.D5
 TEST(SharedMemoryChannel, UndeclaredIntentChannelIsUnspecifiedNotAConcreteName)
 {
     const auto name{unique_channel("intent_channel_none")};
@@ -117,9 +107,7 @@ TEST(SharedMemoryChannel, UndeclaredIntentChannelIsUnspecifiedNotAConcreteName)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
-// An over-long name is REFUSED, never truncated: a clipped name would reach the consumer as a
-// different string — failing its vocabulary check far from the cause, or silently aliasing another
-// declared name and mis-gating recognition.
+// refs: ADR-22.D4
 TEST(SharedMemoryChannel, RefusesAnIntentChannelNameThatWouldNotFit)
 {
     const auto name{unique_channel("intent_channel_long")};

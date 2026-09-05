@@ -1,30 +1,12 @@
-//
-// Coverage for the WindowClosedConsumer coalescing adapter.
-//
-// HOMING NOTE (Kleio) — do NOT add a "per-window frame membership" test here.
-// It cannot fail at this layer, and a can't-fail gate is worse than no gate.
-// WindowClosed(K) is synthesized only on the Nth shard's seal for window K
-// (`seal_counts_[K] >= shard_count_`), and each shard's channel is SPSC-FIFO, so a
-// shard's window-K data necessarily precedes its own window-K seal, which necessarily
-// precedes WindowClosed(K). Membership is implied by the adapter's own structure —
-// asserting it here makes the SUT its own oracle.
-//
-// The invariant IS falsifiable one layer up, on the producer, where the seal watermark
-// is applied only once the shard ring has drained (logcraft `sharded_pipeline.cpp`,
-// `apply_seal_if_due()` inside the `depth == 0` branch). It is pinned there, end-to-end
-// over the real transport under real backpressure, by
-// `ShmGate.DataPrecedesSealPerShardUnderBackpressure`
-// (logcraft/core/tests/determinism/test_determinism_shm_gate.cpp) — verified by mutation:
-// hoisting that call out of the drained branch reddens it. Seal completeness at a
-// PlayToTarget freeze is pinned by `ShmGate.WindowSealsCompleteUnderPlayToTargetWithoutStop`;
-// the closed-window count for a fixed target by
-// `CodeRoastServerTestSuite.InsightBarrierClosesEachWindowExactlyOnce` (coderoast-server).
 
+// note: per-window membership cannot FAIL here — the adapter's own structure implies it.
+// refs: F-SRC-logcraft:test_determinism_shm_gate.cpp:DataPrecedesSealPerShardUnderBackpressure
+// refs: F-SRC-coderoast-server:test_insight_consumer_windows.cpp
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (the test aggregate)
+import coderoast.ipc.consumer.test;
 
 namespace
 {
@@ -107,7 +89,6 @@ TEST(WindowClosedConsumer, EmitsOneEventPerWindowAcrossShards)
 
     ProducerHarness producers{"coalesce", kShardCount};
 
-    // Push one data frame + one seal for window 0 on each shard, then close.
     for (std::uint32_t shard{0}; shard < kShardCount; ++shard)
     {
         (void)producers.producers[shard].push(make_data(1, shard, 100 + shard, "d0"));
@@ -144,14 +125,12 @@ TEST(WindowClosedConsumer, EmitsOneEventPerWindowAcrossShards)
         }
     }
 
-    // Exactly 2 windows × 4 shards = 8 raw seals were swallowed; 2 events emitted.
     ASSERT_EQ(closed_windows.size(), 2U);
     EXPECT_EQ(closed_windows[0], 0U);
     EXPECT_EQ(closed_windows[1], 1U);
     EXPECT_EQ(consumer.windows_closed(), 2U);
     EXPECT_EQ(consumer.seals_observed(), 2U * kShardCount);
 
-    // Each shard sent 2 data frames → 8 total.
     EXPECT_EQ(data_frames_seen, 2U * kShardCount);
     EXPECT_EQ(consumer.frames_emitted(), data_frames_seen);
 }
@@ -163,7 +142,6 @@ TEST(WindowClosedConsumer, DataFrameBeforeWindowClosedRespectsCausalOrder)
 
     ProducerHarness producers{"order", kShardCount};
 
-    // Each shard: one data frame BEFORE the seal, one AFTER.
     for (std::uint32_t shard{0}; shard < kShardCount; ++shard)
     {
         (void)producers.producers[shard].push(make_data(1, shard, kSealTick - 50, "pre"));

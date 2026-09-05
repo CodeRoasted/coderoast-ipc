@@ -1,7 +1,6 @@
-// coderoast.ipc.consumer.test — shared test infrastructure, on the logcraft.test
-// pattern. Test TUs import this instead of spelling out the import block. ipc.consumer is a
-// SINGLE module (nothing sealed, no partition earns its keep; see the package CMake note); the
-// re-exports std + the facade + the upstream core module the tests exercise.
+// refs: ADR-3.D4, F-SRC-coderoast-ipc:consumer/CMakeLists.txt
+// invariant: the package is one module with nothing sealed, so this aggregate re-exports the whole
+// facade and no partition is declared.
 export module coderoast.ipc.consumer.test;
 export import std;
 export import coderoast.ipc.consumer;

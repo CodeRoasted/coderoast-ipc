@@ -1,23 +1,8 @@
-//
-// Channel-shutdown semantics for the v3 SharedMemorySpscChannel.
-//
-// These tests cover the EOS-as-state-transition contract that replaces
-// the legacy "in-band EOS frame".  Two close primitives exist:
-//
-//   * close_graceful() — orderly shutdown.  No new pushes accepted,
-//     pending frames remain readable, idempotent.  Eventually
-//     try_pop_status returns Closed once read_sequence reaches the
-//     write_sequence snapshot.
-//
-//   * close_abort()    — out-of-band cancel.  Wakes parked producers
-//     with PushStatus::Aborted and consumers with PopStatus::Aborted.
-//     Terminal: cannot be downgraded by close_graceful.
-//
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.core.test; // std + the facade (the test aggregate)
+import coderoast.ipc.core.test;
 
 namespace
 {
@@ -71,9 +56,6 @@ struct ScopedChannel
 };
 } // namespace
 
-// --------------------------------------------------------------------
-// 1. close_graceful is idempotent on a freshly-opened channel.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, OpenCloseGracefulIsIdempotent)
 {
     ScopedChannel ch{"idempotent"};
@@ -81,20 +63,16 @@ TEST(ChannelShutdown, OpenCloseGracefulIsIdempotent)
     EXPECT_EQ(ch.producer.state(), coderoast::ipc::ChannelState::Open);
 
     ch.producer.close_graceful();
-    ch.producer.close_graceful(); // idempotent
+    ch.producer.close_graceful();
     ch.producer.close_graceful();
 
     Frame out{};
     const auto status{ch.consumer.try_pop_status(out)};
     EXPECT_EQ(status, coderoast::ipc::PopStatus::Closed);
-    // State should eventually settle on Closed (try_pop_status promotes
-    // Closing -> Closed once the drain snapshot is reached).
+    // assert: try_pop_status is what promotes Closing to Closed; state() alone never does.
     EXPECT_EQ(ch.consumer.state(), coderoast::ipc::ChannelState::Closed);
 }
 
-// --------------------------------------------------------------------
-// 2. After close_graceful, subsequent pushes are rejected with Closed.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, CloseGracefulRejectsPush)
 {
     ScopedChannel ch{"reject_push"};
@@ -105,15 +83,10 @@ TEST(ChannelShutdown, CloseGracefulRejectsPush)
     EXPECT_EQ(ch.producer.try_push_status(make_frame(2)), coderoast::ipc::PushStatus::Closed);
     EXPECT_EQ(ch.producer.push_status(make_frame(3)), coderoast::ipc::PushStatus::Closed);
 
-    // The bool-shim form returns false.
     EXPECT_FALSE(ch.producer.try_push(make_frame(4)));
     EXPECT_FALSE(ch.producer.push(make_frame(5)));
 }
 
-// --------------------------------------------------------------------
-// 3. close_graceful preserves frames already in the ring; the consumer
-//    drains them in order and only then observes PopStatus::Closed.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, CloseGracefulPreservesPending)
 {
     ScopedChannel ch{"preserve_pending"};
@@ -134,20 +107,14 @@ TEST(ChannelShutdown, CloseGracefulPreservesPending)
     }
 
     EXPECT_EQ(ch.consumer.try_pop_status(out), coderoast::ipc::PopStatus::Closed);
-    // Closed is sticky.
+    // assert: Closed is sticky — a further pop cannot fall back to Empty.
     EXPECT_EQ(ch.consumer.try_pop_status(out), coderoast::ipc::PopStatus::Closed);
 }
 
-// --------------------------------------------------------------------
-// 4. close_abort unblocks a producer that is parked in push() because
-//    the ring is full (Block policy).  No deadlock; producer returns
-//    PushStatus::Aborted in bounded time.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, CloseAbortUnblocksBlockedPush)
 {
     ScopedChannel ch{"abort_unblocks_push", /*slot_count=*/2U};
 
-    // Fill the ring so the next push blocks.
     ASSERT_EQ(ch.producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
     ASSERT_EQ(ch.producer.try_push_status(make_frame(2)), coderoast::ipc::PushStatus::Ok);
     ASSERT_EQ(ch.producer.try_push_status(make_frame(3)), coderoast::ipc::PushStatus::Full);
@@ -156,7 +123,8 @@ TEST(ChannelShutdown, CloseAbortUnblocksBlockedPush)
     std::thread producer_thread{[&]() noexcept
                                 { push_result.store(ch.producer.push_status(make_frame(3))); }};
 
-    // Give the producer a moment to park.
+    // assert: the sleep lets the producer reach the park; too short and the abort would race the
+    // park rather than exercise the wake.
     std::this_thread::sleep_for(50ms);
 
     ch.producer.close_abort();
@@ -167,8 +135,6 @@ TEST(ChannelShutdown, CloseAbortUnblocksBlockedPush)
         << "producer did not wake from close_abort within 2 s";
     EXPECT_EQ(push_result.load(), coderoast::ipc::PushStatus::Aborted);
 
-    // Residual in-ring frames are still drainable post-abort; after they
-    // are drained the next pop reports Aborted.
     Frame out{};
     while (ch.consumer.try_pop_status(out) == coderoast::ipc::PopStatus::Ok)
     {
@@ -176,17 +142,12 @@ TEST(ChannelShutdown, CloseAbortUnblocksBlockedPush)
     EXPECT_EQ(ch.consumer.try_pop_status(out), coderoast::ipc::PopStatus::Aborted);
 }
 
-// --------------------------------------------------------------------
-// 5. AdaptivePark producers park on the futex when the ring is full
-//    and must wake on close_abort within bounded time.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, AdaptiveParkWakesOnAbort)
 {
     ScopedChannel ch{"park_wakes_abort", /*slot_count=*/2U,
                      coderoast::ipc::BackpressurePolicy::Block,
                      coderoast::ipc::WaitStrategy::AdaptivePark};
 
-    // Fill the ring so the next push parks.
     ASSERT_EQ(ch.producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
     ASSERT_EQ(ch.producer.try_push_status(make_frame(2)), coderoast::ipc::PushStatus::Ok);
 
@@ -203,7 +164,7 @@ TEST(ChannelShutdown, AdaptiveParkWakesOnAbort)
     {
         std::this_thread::yield();
     }
-    // Let the producer transition through spin -> yield -> futex park.
+    // assert: long enough for the strategy to walk spin, then yield, then the futex park.
     std::this_thread::sleep_for(100ms);
 
     const auto t0{std::chrono::steady_clock::now()};
@@ -215,11 +176,6 @@ TEST(ChannelShutdown, AdaptiveParkWakesOnAbort)
     EXPECT_LT(elapsed, 2s) << "AdaptivePark producer did not wake within 2 s";
 }
 
-// --------------------------------------------------------------------
-// 6. No EOS frame is ever written.  After a sequence of pushes followed
-//    by close_graceful, exactly the pushed frames come out — no extra
-//    sentinel frame.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, NoEosFrameWritten)
 {
     ScopedChannel ch{"no_eos_frame"};
@@ -246,14 +202,9 @@ TEST(ChannelShutdown, NoEosFrameWritten)
     }
 
     EXPECT_EQ(popped, kCount) << "no synthetic EOS frame should be in the stream";
-    // ChannelStats only counts producer-issued data pushes.
     EXPECT_EQ(ch.producer.stats().pushed, kCount);
 }
 
-// --------------------------------------------------------------------
-// 8. RAII destructor does not hang when a producer is parked in push()
-//    on a full ring.  Destruction must abort the channel first.
-// --------------------------------------------------------------------
 TEST(ChannelShutdown, RaiiDestructorNoHang)
 {
     const auto name{unique_channel("raii_destructor")};
@@ -281,8 +232,7 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
     }
     std::this_thread::sleep_for(100ms);
 
-    // Caller-initiated abort: this is what the destructor pattern relies
-    // on. After abort, the parked producer must wake within bounded time.
+    // note: the destructor wakes a parked pusher the same way, through notify_state_change().
     const auto t0{std::chrono::steady_clock::now()};
     producer.close_abort();
     parked.join();

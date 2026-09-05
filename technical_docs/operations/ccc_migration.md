@@ -266,3 +266,162 @@ Behaviour: `malf test coderoast-ipc` on clang-21 and on gcc-16.2, 12 / 19 / 5 ea
 baseline. Lint: `malf lint --all-files` over the repo, **0 findings** after the conversion, the
 same verdict as before it. Count: **723 comment lines at HEAD to 163 as the gate counts them, and
 713 would-be violations to 0.**
+
+---
+
+## Unit 2 — the test tier (13 files, 1 428 lines, 272 comment lines at HEAD)
+
+The three test-aggregate modules, the shared consumer fixture header, and nine gtest translation
+units across the three packages. Under `ADR-26.D6` the test name is the claim, so most body
+comments were mirrors of the assertion beneath them; what survived is the harness's contract, the
+`refs:` a test owes to the slot it witnesses, and the `assert:` lines naming what a fixture value
+was chosen for.
+
+| unit | files | comment lines HEAD → gate | forms written |
+|---|---|---|---|
+| test tier — `core/tests`, `producer/tests`, `consumer/tests` | 13 | 272 → 69 | pre 1 · invariant 4 · assert 11 · note 5 · refs 11 · 10 continuations · 27 tool |
+
+The `refs:` lines address `ADR-3.D4`, `ADR-11.D3`, `ADR-22.D4`, `ADR-22.D5`,
+`F-SRC-coderoast-ipc:{core,producer,consumer}/CMakeLists.txt`,
+`F-SRC-logcraft:test_determinism_shm_gate.cpp` (twice, once with the
+`DataPrecedesSealPerShardUnderBackpressure` scope) and
+`F-SRC-coderoast-server:test_insight_consumer_windows.cpp`. `malf contract-gen` now lists **five
+tests carrying a witness** where the repo had none.
+
+### The census (`OPS-8.S4`) — and the half a COUNT cannot see
+
+Matched before and after the strip: **`NOLINT` 1 → 1, `/*name=*/` 22 → 22, namespace closers
+4 → 4.** Zero differences by count — and the count is not the finding.
+
+`bugprone-argument-comment` does not merely tolerate `/*name=*/`, it **checks the spelling against
+the callee's parameter**, which is the entire reason `ADR-26.D5` admits the form. Comparing each
+site against its callee rather than counting them: **20 of this repo's 24 sites spell `tick` where
+`causal_pipeline_test_harness.hpp`'s `make_frame` declares `logical_tick`**, and clang-tidy errors
+on every one — measured at 7 + 10 + 3 over `test_causal_consumer.cpp`,
+`test_causal_reorder_buffer.cpp` and `test_frame_emitter.cpp` against the consumer test compile
+database. All 20 were repaired to `/*logical_tick=*/`, comment-only, and re-measured at **0**.
+The other four are correct: two `/*slot_count=*/` matching `ScopedChannel`'s parameter, two
+`/*count_drop=*/` in `core.cppm` matching `try_push_impl`'s.
+
+Nobody had seen the 20 because the checker never runs over them: `malf lint` prunes `tests/`,
+`benchmarks/` and `test_package/` from its walk by policy, as `malf/config/.clang-tidy`'s own
+scope note states. That is the finding, not the twenty comments.
+
+The single suppression, `causal_pipeline_test_harness.hpp`'s trailing
+`NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)`, was **measured to silence a real
+diagnostic** (clang-tidy-21 over a stripped copy, same compile database) and kept, moved onto its
+own line above the `return` under a `note:`. Its first placement — between `return std::string{`
+and the cast's first argument — was hoisted by clang-format onto the `return` line and read as a
+trailing comment, detaching the directive from its why; the gate caught it and the pair moved above
+the whole statement.
+
+### The claims
+
+| id | class | the claim, as the deleted comment stated it | disposition |
+|---|---|---|---|
+| M1–M31 | M | thirty-one blocks restating the `TEST` name below them — *"Fill the ring so the next push blocks"*, *"Closed is sticky"* as a gloss on the assertion that says it, the per-call `// data` / `// seal` trailing labels, `// idempotent` above a repeated call, the four `// ─── Observability ───` rulers | deleted |
+| H1 | H | *"Split by domain from the former `test_causal_shm_consumer.cpp` (pure moves; TEST bodies unchanged)"*, in five files | deleted — history |
+| H2 | H | `test_channel_shutdown.cpp`'s numbered section rulers **1, 2, 3, 4, 5, 6, 8** — the file has no 7. A deleted test left its neighbours' numbers behind, and nothing in the tree records which case went | deleted with the rulers; the gap is a finding |
+| H3 | H | *"the EOS-as-state-transition contract that replaces the legacy in-band EOS frame"* | deleted; the live half is `try_pull`'s `invariant:`, written in unit 1 |
+| C1–C11 | C | the harness's include order and linkage contract, and the eleven fixture-value assumptions | `pre:` / `invariant:` / `assert:` |
+| X1–X8 | X | three tests witnessing the IntentChannel contract, two witnessing the causal-key rule, the three aggregates' module-sizing citation | `refs:` |
+| R1–R18 | R | the eighteen rationales below | held → Q1–Q18 |
+
+### Interrogation
+
+One fresh agent, 18 questions, 65 tool uses, 160 k tokens, 7.9 minutes, **no git command**, the
+ledger and every build directory forbidden. **18 of 18 recovered, every one at high confidence.**
+One quotation the reader attributed to `ADR-11.D3` was checked against the ADR before being
+believed, and is there verbatim.
+
+| Q | claim | verdict | what the reader found |
+|---|---|---|---|
+| Q1 | one module per package, no partition | **recovered**, high | found `ADR-3.D4` MUST 1, the live owner, which the site's `refs:` did not name; **and found the citation target stale** — see the dispositions |
+| Q2 | the textual fixture header | **recovered**, high | `ADR-3.D4` MUSTs 1–2 and `ADR-26.D6`'s *"tests/*.hpp fixtures are production code under CCC"* |
+| Q3 | the pid in the channel name | **recovered**, high | sharper than the prose: `create()` unlinks first by default, so two copies of the suite would destroy each other's segment, and the tree carries four build legs per package |
+| Q4 | the separate `main` TU | **recovered** on the mechanism | the consumer tier has five TUs and `main` may live in one; **and "the code does not say"** why the repo refuses `gtest_main` at all — a finding |
+| Q5 | what promotes Closing to Closed | **recovered**, high | |
+| Q6 | the destructor test | **recovered — and it caught the conversion's line WRONG** | the destructor closes **gracefully**, so a woken producer would see `Closed`, not the `Aborted` the test asserts; only the wake is shared. The `note:` said *"the destructor aborts the same way"*. Corrected |
+| Q7 | the sleep before the abort | **recovered**, high | and named the failure the sleep prevents: too short, and the test goes green proving only that a push on an already-aborted channel returns `Aborted` |
+| Q8 | the 2, 0, 1 push order | **recovered**, high | reconstructed the whole falsifiability argument from the `assert:` and the code |
+| Q9 | sorted versus ordered assertions | **recovered**, high | and observed honestly that the tail-drain test would emit in order anyway, so its sort is a declaration of scope |
+| Q10 | the never-produced shard | **recovered**, high | |
+| Q11 | the distinct fixture ticks | **recovered**, high | stronger than the prose: an all-zero-tick fixture collides on the timestamp fallback and `check_causal_monotonicity` terminates the binary |
+| Q12 | the four pulls | **recovered**, high | each one named, including why the fourth counts as attempted |
+| Q13 | the emitter suite name | **recovered**, high | and **ruled the naming consistent**: the test drives the facade, so `TEST(CausalShmConsumer, …)` names the subject under test. The finding this run had opened against it is withdrawn |
+| Q14 | the absent membership test | **recovered**, high | reconstructed the whole homing argument from the one-line `note:` and the two `refs:`, and reached both external gates |
+| Q15 | why the first select is not a block | **recovered**, high | |
+| Q16 | `stats().pushed == kCount` | **recovered**, high | **and found a dormancy**: `kLineFrameFlagEndOfStream` is declared and honoured by `is_control_frame` but set nowhere in ipc, logcraft or coderoast-server |
+| Q17 | the duplicated test helpers | **recovered**, high | nothing structural blocks sharing; the two `make_frame`s differ in signature, so sharing is a design choice |
+| Q18 | the three IntentChannel tests | **recovered**, high | `ADR-22.D4` with `ADR-22.D5` for the undeclared case |
+
+### Dispositions, in the tree
+
+1. **Q6, wrong.** `test_channel_shutdown.cpp`'s `note:` now reads *"the destructor wakes a parked
+   pusher the same way, through notify_state_change()"* — the mechanism the two paths actually
+   share, rather than the close kind they do not.
+2. **Q1, stale citation.** The three aggregates cited only their package's CMake sizing note,
+   whose `§11.9.11` code points at a migration contract that no longer exists. `ADR-3.D4` is the
+   live owner of the one-module rule and is now cited first, with the CMake note kept as the local
+   instance. The `§11.x` residue itself is a finding.
+3. `CausalReorderBuffer.WatermarkFrontierDrainsFinalSealBatchWithoutEos` gained a `refs:` to the
+   producer-side gate that proves the seals it drains actually arrive. Written by hand, so it
+   bypassed `wrap_tagged.py`: the first spelling carried the test's full scope name at **101
+   bytes**, clang-format split it, and `malf format --check` reported an `empty-claim` plus a bare
+   line — the reflow shape `ADR-26.D5` predicts, self-detecting exactly as designed. The file-only
+   form is 53 bytes and holds.
+
+Nothing was re-homed above the comment rung: every held claim is carried by the converted tree or
+by a slot a `refs:` names.
+
+### Findings, outside this comment-only migration
+
+7. **The test tier is outside `malf lint` and carries real diagnostics** (Q-independent, measured).
+   Beyond the 20 argument comments repaired here, one run of clang-tidy-21 over
+   `test_causal_consumer.cpp` also reports `bugprone-exception-escape` on `~ProducerHarness` (it
+   calls `Channel::unlink`, which can throw) and `readability-function-cognitive-complexity` on two
+   `TestBody`s. None of it reds anything today, because `malf/config/.clang-tidy`'s scope note
+   removes `tests/` from the walk by policy. Whether that policy should hold now that a test's
+   `/*name=*/` and `NOLINT` are load-bearing under CCC is **Argos**'s, with **Kleio** on the
+   diagnostics themselves.
+8. **`gtest_main` is refused with no recorded reason** (Q4). All three `CMakeLists.txt` state it as
+   a bare convention and the rest of the workspace — insight-canon, logcraft, insight-eidos,
+   coderoast-server — links `GTest::gtest_main` freely. Either the reason exists and is unwritten,
+   or the convention is arbitrary. **Kleio**.
+9. **`kLineFrameFlagEndOfStream` is set by nobody** (Q16). A workspace-wide sweep finds two sites,
+   both in `core.cppm`: the enumerator and `is_control_frame`'s read of it. End of stream became a
+   channel state, and this flag is what the in-band sentinel left behind. *Justification search:*
+   `ADR-11.D2` still lists *"the `WindowSeal`/`EndOfStream` markers"* among what the transport owns,
+   so deleting the flag would contradict the ADR as written — this is a question about `ADR-11.D2`'s
+   text before it is a question about the code. **Daidalos**, then **Hephaïstos**.
+10. **`test_channel_shutdown.cpp` was numbered 1–8 with no 7.** The numbering is gone with the
+    rulers; whether the deleted case is still covered is **Kleio**'s to say.
+11. **The `§11.x` section codes are stale across the workspace, not just here** (Q1). The attic
+    records that 262 such references were repointed to `ADR-3.D4`; a sweep finds at least 24 left,
+    over ten files in eight repos — `coderoast-ipc` (10), `insight-canon` (7), `logcraft` (4),
+    `insight-eidos` (4), `coderoast-security` (5), plus `malf`, `coderoast-server` and two docs.
+    They live in CMake and conanfile comments, outside every gate's population. **Daidalos** for the
+    repoint, **Argos** if it wants an arm.
+
+### Witnesses
+
+Comment-only: the code token stream of all thirteen files is identical to `HEAD`'s. Grammar:
+`malf format --check` over the three test directories — 69 comment lines, **0 would-be
+violations**. Behaviour: `malf test coderoast-ipc` on clang-21 and on gcc-16.2, 12 / 19 / 5 each,
+equal to the baseline. Count: **272 comment lines at HEAD to 69, and 246 would-be violations to 0.**
+
+---
+
+## Exit — the repo reads zero
+
+`malf format --check coderoast-ipc` over all 18 files: **232 comment lines, 0 would-be violations**,
+against a baseline of 995 comment lines and 959 would-be violations. A **77 % reduction** in
+comment lines, and the whole of it in two comment-only commits.
+
+Forms across the repo: `pre` 4 · `post` 24 · `invariant` 48 · `assert` 17 · `note` 13 · `refs` 25 ·
+61 continuations · 40 tool forms. `malf contract-gen coderoast-ipc` renders 18 files and 93 tagged
+sites into 309 lines, with a resolving `refs:` index and five tests carrying a witness. **Zero law
+blocks.**
+
+`malf lint --all-files` reads 0 findings, the same verdict as before the run. Arming is the next
+and last act (`OPS-8.S12`), and it is deliberately not part of a comment-only commit.

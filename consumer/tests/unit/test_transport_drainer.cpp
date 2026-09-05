@@ -1,14 +1,7 @@
-//
-// Unit coverage for ShmTransportDrainer — step 1 of the pull-based causal SHM
-// consumer pipeline: EOS absorption, seal surfacing, transport_complete,
-// channel_stats — plus its atomic counters and discrete-event observer.
-//
-// Split by domain from the former test_causal_shm_consumer.cpp (pure moves;
-// TEST bodies unchanged). Shared fixtures: causal_pipeline_test_harness.hpp.
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (the test aggregate)
+import coderoast.ipc.consumer.test;
 
 #include "causal_pipeline_test_harness.hpp"
 
@@ -31,12 +24,10 @@ TEST(ShmTransportDrainer, AbsorbsEosFrameAndFlipsShardEos)
     EXPECT_EQ(payload_of(out), "data");
     EXPECT_FALSE(drainer.shard_eos(0));
 
-    // Second pull pops the EOS marker; try_pull must NOT surface it.
     EXPECT_FALSE(drainer.try_pull(0, out));
     EXPECT_TRUE(drainer.shard_eos(0));
     EXPECT_TRUE(drainer.transport_complete());
 
-    // Further pulls must remain false (idempotent EOS).
     EXPECT_FALSE(drainer.try_pull(0, out));
 }
 
@@ -48,8 +39,6 @@ TEST(ShmTransportDrainer, SealFrameSurfacesToCaller)
     (void)producers.producers[0].push(
         make_frame(1, 0, "", 0, 0, 0, Flags::kLineFrameFlagWindowSeal));
 
-    // Seals are surfaced to the caller (the reorder buffer's seal-driven
-    // frontier gates on them) — unlike EOS, they do not flip the eos flag.
     Frame out{};
     ASSERT_TRUE(drainer.try_pull(0, out));
     EXPECT_TRUE(coderoast::ipc::has_flag(out.header.flags, Flags::kLineFrameFlagWindowSeal));
@@ -83,10 +72,6 @@ TEST(ShmTransportDrainer, CloseIsIdempotent)
     EXPECT_NO_THROW(drainer.close());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Observability — atomic counters + discrete-event observer.
-// ─────────────────────────────────────────────────────────────────────────────
-
 TEST(DrainerMetrics, CountsPullsEosAndSeals)
 {
     ProducerHarness producers{"metrics_drainer", 1};
@@ -100,14 +85,15 @@ TEST(DrainerMetrics, CountsPullsEosAndSeals)
     producers.producers[0].close_graceful();
 
     Frame out{};
-    EXPECT_TRUE(drainer.try_pull(0, out));  // data
-    EXPECT_TRUE(drainer.try_pull(0, out));  // seal (surfaced as data=true)
-    EXPECT_FALSE(drainer.try_pull(0, out)); // EOS absorbed
-    EXPECT_FALSE(drainer.try_pull(0, out)); // already EOS — fast-path
+    // assert: the four pulls are data, seal, the absorbed EOS, and the post-EOS fast path.
+    EXPECT_TRUE(drainer.try_pull(0, out));
+    EXPECT_TRUE(drainer.try_pull(0, out));
+    EXPECT_FALSE(drainer.try_pull(0, out));
+    EXPECT_FALSE(drainer.try_pull(0, out));
 
     const auto metrics{drainer.metrics()};
     EXPECT_EQ(metrics.pulls_attempted, 4U);
-    // pulls_succeeded counts only frames returned to the caller: data + seal.
+    // assert: pulls_succeeded counts only what reached the caller — the data and the seal.
     EXPECT_EQ(metrics.pulls_succeeded, 2U);
     EXPECT_EQ(metrics.eos_observed, 1U);
     EXPECT_EQ(metrics.seals_observed, 1U);

@@ -1,7 +1,5 @@
-//
-// Single gtest entry point for the consumer unit-test executable — every
-// other TU in tests/unit/ holds only TESTs (link GTest::gtest, not gtest_main).
 
+// note: the one entry point of the consumer test binary; the other TUs hold only TESTs.
 #include <gtest/gtest.h>
 
 int main(int argc, char** argv)

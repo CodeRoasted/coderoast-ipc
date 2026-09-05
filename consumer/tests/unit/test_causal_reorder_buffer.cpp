@@ -1,16 +1,7 @@
-//
-// Unit coverage for CausalReorderBuffer — step 2 of the pull-based causal SHM
-// consumer pipeline: frontier gating (all-shards-produced, idle-shard, and the
-// watermark tail-drain at a PlayToTarget freeze), the deterministic per-window
-// seal order, the drained predicate — plus its atomic counters and
-// discrete-event observer.
-//
-// Split by domain from the former test_causal_shm_consumer.cpp (pure moves;
-// TEST bodies unchanged). Shared fixtures: causal_pipeline_test_harness.hpp.
 
 #include <gtest/gtest.h>
 
-import coderoast.ipc.consumer.test; // std + the facade + core (the test aggregate)
+import coderoast.ipc.consumer.test;
 
 #include "causal_pipeline_test_harness.hpp"
 
@@ -20,25 +11,18 @@ TEST(CausalReorderBuffer, FrontierGatesOnceAllShardsProduced)
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
     Buffer buffer{drainer};
 
-    // Both shards produce before we select: refill pulls both, frontier
-    // is satisfied, and the causally-earlier (tick=5) wins.
-    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*tick=*/10));
-    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*tick=*/5));
+    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*logical_tick=*/10));
+    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*logical_tick=*/5));
 
     Frame out{};
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "s1-a");
 
-    // After the s1-a pop, shard 1's heap is empty and shard 1 is not EOS,
-    // so the frontier gate must block emission of s0-a even though shard 0
-    // has a buffered candidate.
     EXPECT_FALSE(buffer.try_select(out));
 
-    // Pushing fresh data to shard 0 does not unblock — shard 1 is still silent.
-    (void)producers.producers[0].push(make_frame(3, 0, "s0-b", /*tick=*/20));
+    (void)producers.producers[0].push(make_frame(3, 0, "s0-b", /*logical_tick=*/20));
     EXPECT_FALSE(buffer.try_select(out));
 
-    // EOS on shard 1 releases the gate; shard 0 frames flow in tick order.
     producers.producers[1].close_graceful();
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "s0-a");
@@ -48,55 +32,39 @@ TEST(CausalReorderBuffer, FrontierGatesOnceAllShardsProduced)
 
 TEST(CausalReorderBuffer, FrontierGatesOnIdleShardThatNeverProducedData)
 {
-    // Regression (seal-driven barrier): a shard that has produced no data
-    // frames at all MUST still gate the frontier until it buffers a frame
-    // (its window seal — the watermark) or reaches EOS. The old data-driven
-    // gate excluded never-produced shards, which let the merge run ahead of
-    // an idle shard that later produces data — e.g. an agent silent for 60 s
-    // that then emits. See the frontier-rule contract in the header.
+    // assert: a shard that has produced nothing at all must still gate the frontier — an agent
+    // silent for a minute and then emitting is the case this pins.
     ProducerHarness producers{"idle_frontier", 2};
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
     Buffer buffer{drainer};
 
-    // Shard 0 produces data; shard 1 is completely silent (no data, no seal,
-    // no EOS) — its agents have not fired yet.
-    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*tick=*/10));
+    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*logical_tick=*/10));
 
-    // Frontier MUST block: emitting s0-a could pass a lower-tick frame that
-    // the still-silent shard 1 has yet to produce.
     Frame out{};
     EXPECT_FALSE(buffer.try_select(out));
 
-    // A window seal from shard 1 is a buffered candidate (seals are the
-    // watermark): the frontier completes and the causally-earliest frame
-    // flows — here the tick=5 seal precedes the tick=10 data.
     (void)producers.producers[1].push(
-        make_frame(2, 1, "", /*tick=*/5, 0, 0, Flags::kLineFrameFlagWindowSeal));
+        make_frame(2, 1, "", /*logical_tick=*/5, 0, 0, Flags::kLineFrameFlagWindowSeal));
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_TRUE(coderoast::ipc::has_flag(out.header.flags, Flags::kLineFrameFlagWindowSeal));
 }
 
+// refs: F-SRC-logcraft:test_determinism_shm_gate.cpp
 TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
 {
-    // Regression (the PlayToTarget freeze stall): at the freeze the last frame on
-    // every shard is that window's seal — all sharing one boundary tick — and NO
-    // eos follows (the engine is paused, not stopped). A strict "empty heap
-    // blocks" frontier emits the first shard's seal, then blocks forever on that
-    // now-empty, non-eos shard, stranding the others' seals so the window never
-    // closes. The watermark frontier drains them: a shard whose watermark has
-    // reached the candidate's tick no longer blocks it.
+    // assert: at a play-to-target freeze every shard's last frame is that window's seal, all on one
+    // boundary tick, and no EOS ever follows because the engine is paused.
     constexpr std::uint64_t kSealTick{1000};
     constexpr std::size_t kShards{3};
     ProducerHarness producers{"tail_drain", kShards};
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = kShards}};
     Buffer buffer{drainer};
 
-    // Every shard emits exactly one window seal at the same boundary tick, then
-    // goes idle — no data after, no eos.
     for (std::uint32_t shard{0}; shard < kShards; ++shard)
     {
-        (void)producers.producers[shard].push(make_frame(shard + 1U, shard, "", /*tick=*/kSealTick,
-                                                         0, 0, Flags::kLineFrameFlagWindowSeal));
+        (void)producers.producers[shard].push(make_frame(shard + 1U, shard, "",
+                                                         /*logical_tick=*/kSealTick, 0, 0,
+                                                         Flags::kLineFrameFlagWindowSeal));
     }
 
     std::vector<std::uint32_t> drained_shards;
@@ -109,7 +77,6 @@ TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
         }
     }
 
-    // All three seals must surface despite no shard ever reaching eos.
     ASSERT_EQ(drained_shards.size(), kShards)
         << "watermark frontier stranded the final seal batch (drained only "
         << drained_shards.size() << "/" << kShards << ")";
@@ -117,19 +84,10 @@ TEST(CausalReorderBuffer, WatermarkFrontierDrainsFinalSealBatchWithoutEos)
     EXPECT_EQ(drained_shards, (std::vector<std::uint32_t>{0U, 1U, 2U}));
 }
 
-// The per-shard seals of one window all carry the SAME causal triple — emit_control_frame sets
-// neither agent_order nor intra_agent_index, so each is (tick, 0, 0). `shard_id` is therefore a
-// REACHABLE tie-break, and it is what makes the reconciled seal order deterministic.
-//
-// This regression pins that. It is arranged so it can FAIL: the shards are pushed in the order
-// 2, 0, 1, so their global `header.sequence` values (1, 2, 3) run OPPOSITE to shard_id. The
-// comparator previously consulted `header.sequence` — the cross-shard racing counter the
-// determinism carve-out puts off-limits — before ever reaching shard_id, which made the emitted
-// seal order follow the transport race instead of the causal key. Under that comparator this test
-// yields {2, 0, 1}; under the current one it yields {0, 1, 2}.
-//
-// Note this asserts the ORDER, unlike the tail-drain test above, which sorts first because its
-// property is "no seal is stranded by the frontier gate", not "the seals come out in one order".
+// refs: ADR-11.D3
+// assert: the push order 2, 0, 1 makes the global sequence run opposite to shard_id, so a
+// comparator consulting it would emit 2, 0, 1 here instead of 0, 1, 2.
+// note: the tail-drain test above sorts first; its property is completeness, not order.
 TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSequence)
 {
     constexpr std::uint64_t kSealTick{1000};
@@ -138,14 +96,13 @@ TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSe
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = kShards}};
     Buffer buffer{drainer};
 
-    // Push order (and therefore ascending global sequence) deliberately inverts shard_id.
     constexpr std::array<std::uint32_t, kShards> kPushOrder{2U, 0U, 1U};
     for (std::size_t index{0}; index < kPushOrder.size(); ++index)
     {
         const auto shard{kPushOrder[index]};
         (void)producers.producers[shard].push(make_frame(static_cast<std::uint64_t>(index) + 1U,
-                                                         shard, "", /*tick=*/kSealTick, 0, 0,
-                                                         Flags::kLineFrameFlagWindowSeal));
+                                                         shard, "", /*logical_tick=*/kSealTick, 0,
+                                                         0, Flags::kLineFrameFlagWindowSeal));
     }
 
     std::vector<std::uint32_t> emitted_shards;
@@ -174,24 +131,17 @@ TEST(CausalReorderBuffer, DrainedRequiresAllShardsEosAndEmptyHeaps)
     EXPECT_FALSE(buffer.drained());
 
     producers.producers[0].close_graceful();
-    (void)producers.producers[1].push(make_frame(1, 1, "x", /*tick=*/5));
+    (void)producers.producers[1].push(make_frame(1, 1, "x", /*logical_tick=*/5));
     producers.producers[1].close_graceful();
 
-    // No refill has happened yet: drainer EOS flags are still unset.
     EXPECT_FALSE(buffer.drained());
 
     Frame out{};
-    // Refill via try_select absorbs both EOS frames and the data frame.
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "x");
 
-    // Both shards EOS, heaps empty \u2192 drained.
     EXPECT_TRUE(buffer.drained());
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Observability — atomic counters + discrete-event observer.
-// ─────────────────────────────────────────────────────────────────────────────
 
 TEST(ReorderMetrics, CountsRefillsSelectsAndFrontierBlocks)
 {
@@ -199,21 +149,15 @@ TEST(ReorderMetrics, CountsRefillsSelectsAndFrontierBlocks)
     Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
     Buffer buffer{drainer};
 
-    // No data anywhere → there is no candidate, so try_select returns false
-    // without a frontier block (the gate only fires when a candidate exists
-    // but a lagging shard holds it back — see the next select below).
+    // assert: with no candidate anywhere there is nothing for a lagging shard to hold back, so this
+    // select is not a frontier block.
     Frame out{};
     EXPECT_FALSE(buffer.try_select(out));
 
-    // Both shards produce before any select → frontier satisfied; the
-    // first select pops the lower-tick frame (shard 1, tick=5).
-    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*tick=*/10));
-    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*tick=*/5));
+    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*logical_tick=*/10));
+    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*logical_tick=*/5));
     ASSERT_TRUE(buffer.try_select(out));
 
-    // Shard 1 now has an empty heap, is not EOS, and its watermark (tick=5)
-    // is below the only candidate s0-a (tick=10) → the frontier gate MUST
-    // block: shard 1 could still deliver a frame causally before s0-a.
     EXPECT_FALSE(buffer.try_select(out));
 
     const auto metrics{buffer.metrics()};
@@ -237,10 +181,9 @@ TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
     Frame out{};
     ASSERT_TRUE(buffer.try_select(out));
 
-    // EOS + empty heap → next try_select should fire kDrainComplete exactly once.
     producers.producers[0].close_graceful();
     EXPECT_FALSE(buffer.try_select(out));
-    EXPECT_FALSE(buffer.try_select(out)); // idempotent
+    EXPECT_FALSE(buffer.try_select(out));
 
     const auto drain_complete{coderoast::ipc::consumer::ConsumerEvent::kDrainComplete};
     const auto count{

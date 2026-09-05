@@ -1,16 +1,6 @@
-//
-// Shared fixtures for the pull-based causal SHM consumer pipeline unit tests
-// (test_transport_drainer / test_causal_reorder_buffer / test_frame_emitter /
-// test_causal_consumer — split by domain from the former
-// test_causal_shm_consumer.cpp; helper bodies unchanged).
-//
-// The fixtures use real SHM channels (via SharedMemorySpscChannel) and unique
-// PID-suffixed names so they are safe under parallel ctest.
-//
-// Textual header by design, not a module partition: the anonymous namespace
-// gives every including TU its own internal-linkage copy of the fixtures.
-// Include it AFTER `import coderoast.ipc.consumer.test;` — it names types
-// exported by that module.
+// pre: include after `import coderoast.ipc.consumer.test;` — it names that module's types.
+// invariant: textual and not a module partition, so each including TU gets its own internal-linkage
+// copy of the fixtures.
 #pragma once
 
 #include <unistd.h>
@@ -50,8 +40,9 @@ using Flags = coderoast::ipc::LineFrameFlags;
 
 [[nodiscard]] std::string payload_of(const Frame& frame)
 {
-    return std::string{// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-                       reinterpret_cast<const char*>(frame.payload.data()),
+    // note: the payload is raw bytes with an explicit size, not a NUL-terminated string.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    return std::string{reinterpret_cast<const char*>(frame.payload.data()),
                        frame.header.payload_size};
 }
 
