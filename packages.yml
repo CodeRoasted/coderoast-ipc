@@ -1,3 +1,4 @@
+comment_contract: true
 packages:
   coderoast_ipc_core:
     path: core

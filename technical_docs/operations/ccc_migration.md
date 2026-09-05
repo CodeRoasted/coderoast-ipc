@@ -282,7 +282,7 @@ was chosen for.
 | test tier — `core/tests`, `producer/tests`, `consumer/tests` | 13 | 272 → 69 | pre 1 · invariant 4 · assert 11 · note 5 · refs 11 · 10 continuations · 27 tool |
 
 The `refs:` lines address `ADR-3.D4`, `ADR-11.D3`, `ADR-22.D4`, `ADR-22.D5`,
-`F-SRC-coderoast-ipc:{core,producer,consumer}/CMakeLists.txt`,
+`F-SRC-coderoast-ipc:core/CMakeLists.txt` and its producer and consumer twins,
 `F-SRC-logcraft:test_determinism_shm_gate.cpp` (twice, once with the
 `DataPrecedesSealPerShardUnderBackpressure` scope) and
 `F-SRC-coderoast-server:test_insight_consumer_windows.cpp`. `malf contract-gen` now lists **five
@@ -423,5 +423,8 @@ Forms across the repo: `pre` 4 · `post` 24 · `invariant` 48 · `assert` 17 · 
 sites into 309 lines, with a resolving `refs:` index and five tests carrying a witness. **Zero law
 blocks.**
 
-`malf lint --all-files` reads 0 findings, the same verdict as before the run. Arming is the next
-and last act (`OPS-8.S12`), and it is deliberately not part of a comment-only commit.
+`malf lint --all-files` reads 0 findings, the same verdict as before the run.
+
+`comment_contract: true` is declared in `packages.yml` (`OPS-8.S12`, a deliberately separate,
+non-comment-only commit), so from here the CCC phase **reds** this repo instead of counting it,
+on every `malf format --check` and at the tag through `lint.yml`.
