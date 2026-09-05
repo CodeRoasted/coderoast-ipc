@@ -25,7 +25,7 @@ jobs:
     secrets: inherit
   release:
     needs: ci
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@4a03e3a352b9d779305f9a8e38a129717076bf88
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@61fc5534e116d8b278f44ccad8845926ae721ff9
     with:
       tag: ${{ github.event.inputs.tag || github.ref_name }}
       packages: |
