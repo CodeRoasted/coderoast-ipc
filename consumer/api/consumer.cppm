@@ -1,7 +1,3 @@
-// coderoast.ipc.consumer — PURE named module (1.5.1 unwrap). Header-only: the former 10
-// api/coderoast/ipc/consumer/*.hpp now live here, concatenated in dependency (topo) order. std via
-// import std; core frame/channel types via import coderoast.ipc.core (was textual includes). No
-// detail namespace / thread_local / POSIX in this package. (ingest.hpp umbrella retired.)
 export module coderoast.ipc.consumer;
 import std;
 import coderoast.ipc.core;
@@ -9,43 +5,27 @@ import coderoast.ipc.core;
 export namespace coderoast::ipc::consumer
 {
 
-// ─────────── from consumer_metrics.hpp ───────────
-/// Snapshot of the SHM transport drainer's hot-path counters.
-///
-/// All counters are monotonically increasing; deltas between two
-/// snapshots are the canonical way to read rates. Counters are updated
-/// with `memory_order_relaxed` writes inside the hot path and `acquire`
-/// reads here, so a snapshot is internally inconsistent under heavy
-/// concurrency — that is intentional and cheaper than a global mutex.
+// invariant: monotonic counters written relaxed on the hot path, so a snapshot is internally
+// inconsistent under concurrency — cheaper than a lock.
 struct DrainerMetrics
 {
-    /// Number of times `try_pull` was invoked, regardless of outcome.
     std::uint64_t pulls_attempted{0};
-    /// Number of `try_pull` calls that returned a payload frame.
     std::uint64_t pulls_succeeded{0};
-    /// Number of EOS frames absorbed by the drainer (never surfaced).
     std::uint64_t eos_observed{0};
-    /// Number of window-seal frames observed (surfaced to the caller; the
-    /// reorder buffer's seal-driven frontier gates on them).
     std::uint64_t seals_observed{0};
 };
 
-/// Snapshot of the causal reorder buffer's hot-path counters.
+// invariant: every try_select makes exactly one refill; frontier_blocks counts the selections a
+// lagging shard held back.
 struct ReorderMetrics
 {
-    /// Number of `refill` calls (one per `try_select`).
     std::uint64_t refills{0};
-    /// Number of `try_select` invocations.
     std::uint64_t selects_attempted{0};
-    /// Number of successful selections (a frame was popped).
     std::uint64_t selects_succeeded{0};
-    /// Number of selections blocked by the watermark frontier gate (a non-EOS
-    /// shard had an empty heap and a watermark below the candidate's tick, so it
-    /// could still deliver a causally-earlier frame).
     std::uint64_t frontier_blocks{0};
 };
 
-/// Snapshot of the frame emitter's counters.
+// invariant: plain counters, not atomics — the emitter has a single owner thread.
 struct EmitterMetrics
 {
     std::uint64_t emitted{0};
@@ -53,7 +33,6 @@ struct EmitterMetrics
     std::uint64_t last_sequence{0};
 };
 
-/// Aggregate snapshot returned by `CausalShmConsumer::metrics()`.
 struct ConsumerMetrics
 {
     DrainerMetrics drainer{};
@@ -61,81 +40,45 @@ struct ConsumerMetrics
     EmitterMetrics emitter{};
 };
 
-/// Discrete events surfaced through the optional consumer observer.
-/// The observer is invoked on rare lifecycle transitions only; it is NOT
-/// invoked on the per-frame hot path. Use `ConsumerMetrics` snapshots
-/// for per-frame counters.
+// invariant: raised on lifecycle transitions only, never on the per-frame path; per-frame numbers
+// come from ConsumerMetrics.
 enum class ConsumerEvent : std::uint8_t
 {
-    /// A shard transitioned from "active" to "EOS observed".
     kShardEos = 0,
-    /// A `try_select` returned false because the frontier was incomplete.
-    /// Fired at most once per try_select that blocks; rate is bounded by
-    /// the caller's poll loop, NOT by frame rate.
+    // invariant: at most one per blocking try_select, so its rate follows the caller's poll loop
+    // and not the frame rate.
     kFrontierBlock,
-    /// Every shard has reported EOS and the reorder buffer is empty.
     kDrainComplete,
 };
 
-/// Payload accompanying a `ConsumerEvent`.
 struct ConsumerEventPayload
 {
     ConsumerEvent event{ConsumerEvent::kShardEos};
-    /// Shard identifier when the event is per-shard (kShardEos,
-    /// kFrontierBlock). Set to `kAllShards` for whole-pipeline events.
     std::size_t shard_id{0};
     static constexpr std::size_t kAllShards{static_cast<std::size_t>(-1)};
 };
 
-/// Observer callback. Empty by default; injectable per component or via
-/// the `CausalShmConsumer` facade. Setting an observer is a control-plane
-/// operation; the observer itself is invoked off the per-frame hot path.
 using ConsumerObserver = std::function<void(const ConsumerEventPayload&)>;
 
-// ─────────── the causal ordering key + comparator ───────────
-// The causal coordinate of a frame. The key is UNIQUE, but the reason differs by frame class,
-// and conflating the two is what previously hid a determinism defect here:
-//
-//   * DATA frames are unique on `(agent_order, intra_agent_index)` ALONE, structurally.
-//     `agent_order` namespaces are DISJOINT — agents take [0, agents.size()), flow records take
-//     `kFlowOrderBase + flow_index` (logcraft `core.api-agent.cppm`) — and scenario validation
-//     enforces `agents.size() < kFlowOrderBase`, so the headroom cannot be consumed.
-//     `intra_agent_index` is a per-producer run-global monotonic counter.
-//
-//   * CONTROL frames (WindowSeal) are NOT. `SharedMemorySink::emit_control_frame` sets neither
-//     `agent_order` nor `intra_agent_index`, so every shard's seal for window K carries the
-//     identical triple `(T, 0, 0)`. `shard_id` is what separates them, and it is therefore a
-//     REACHABLE tie-break on the hot path — not the defensive dead code it looks like.
-//
-// That second case is why `header.sequence` must never appear in the ordering. It is the GLOBAL
-// transport counter (`producer.cppm`: `global_sequence_.fetch_add`), assigned under a cross-shard
-// race and named explicitly in CLAUDE.md § Determinism & Replay's carve-out as non-deterministic.
-// It used to sit BETWEEN the triple and `shard_id`, so for the tied seals it decided the order
-// and `shard_id` was never consulted: the reconciled seal order was non-deterministic across
-// replays while the code documented it as a "deterministic byte sequence". Ordering on the
-// carve-out field laundered non-determinism straight into the reconciled stream, which is the one
-// place the contract says must be deterministic.
+// refs: ADR-11.D3
+// invariant: data frames are unique on (agent_order, intra_agent_index) alone — the agent_order
+// namespaces are disjoint and the index is per-producer monotonic.
+// invariant: every shard's seal for one window carries the same (tick, 0, 0), so shard_id is a
+// reachable tie-break rather than defensive code.
+// invariant: header.sequence is the cross-shard race counter and is never in the key.
 struct CausalKey
 {
     std::uint64_t logical_tick{0};
     std::uint32_t agent_order{0};
     std::uint32_t intra_agent_index{0};
-    // Separates the per-shard WindowSeals of one window, which tie on the triple above. Already
-    // on the wire (the producer populates it), so this costs no bytes. This is what lifts the
-    // contract from "deterministic multiset" to "deterministic byte sequence".
+    // invariant: already on the wire, so the tie-break costs no bytes; it is what lifts the merge
+    // from a deterministic multiset to a deterministic byte sequence.
     std::uint32_t shard_id{0};
 };
 
-// ── The causal ordering: ONE key, ONE comparator ────────────────────────────
-// Every pipeline that reorders frames causally derives the key here and compares with
-// `causal_less` here. This is deliberate: the pull-based pipeline and the legacy iterator
-// must produce the SAME frame order, and that equivalence used to be three hand-maintained
-// copies plus a comment asserting they matched. One definition makes it true by construction
-// instead of by assertion — there is no longer an equivalence to drift.
-//
-// `logical_tick == 0` means the producer emitted no logical clock, so event time falls back to
-// the wall stamp. The fallback is part of the key, not a caller's job: a caller that forgot it
-// would order un-ticked frames by a 0 that compares equal for every frame.
+// invariant: one key and one comparator for every causal reorder over these frames.
+// invariant: logical_tick == 0 means the producer emitted no logical clock, so the fallback to the
+// wall stamp is made here and not at each caller.
 template <coderoast::ipc::FrameLike Frame>
 [[nodiscard]] inline CausalKey extract_causal_key(const Frame& frame) noexcept
 {
@@ -148,14 +91,9 @@ template <coderoast::ipc::FrameLike Frame>
     };
 }
 
-// Strict TOTAL order over CausalKey — total, not merely a strict weak ordering, because the
-// four-tuple is unique (see CausalKey: the triple for data frames, the triple + shard_id for the
-// tied per-window seals). Two distinct frames never compare equivalent, so the merge has no
-// residual tie and its output is a deterministic byte sequence.
-//
-// `header.sequence` is deliberately NOT consulted — see the CausalKey comment for why reading the
-// global race-assigned counter here was a live determinism defect rather than a harmless
-// fallback.
+// refs: ADR-11.D3
+// post: a strict TOTAL order — no two distinct frames compare equivalent, so the merge leaves no
+// residual tie.
 template <coderoast::ipc::FrameLike Frame>
 [[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
 {
@@ -176,18 +114,8 @@ template <coderoast::ipc::FrameLike Frame>
     return lhs_key.shard_id < rhs_key.shard_id;
 }
 
-// ─────────── from scoped_shm_channel_set.hpp ───────────
-/// RAII guard that unlinks every shard of a named sharded SHM channel set
-/// on construction and again on destruction.
-///
-/// Use this around any consumer that owns the lifetime of its channel set
-/// (tests, standalone consumer programs, scenario runners). The pre-unlink
-/// ensures stale frames from a previously crashed run cannot leak into the
-/// current run; the post-unlink ensures the next run starts clean.
-///
-/// This type intentionally lives in coderoast-ipc rather than in any
-/// downstream test helper so that the convention is owned and tested by
-/// the IPC package itself.
+// post: unlinks every shard on construction and again on destruction, so a crashed run's frames
+// cannot leak in and the next run starts clean.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class ScopedShmChannelSet
 {
@@ -233,85 +161,10 @@ class ScopedShmChannelSet
     std::size_t shard_count_{0};
 };
 
-// ─────────── from shm_transport_drainer.hpp ───────────
-/// **Step 1 of the pull-based causal SHM consumer pipeline.**
-///
-/// Owns one `SharedMemorySpscChannel` per shard. Holds **no background
-/// threads, no mutex, no internal queue.** Each call to `try_pull` is a
-/// direct, lock-free pop on the per-shard SPSC ring; the result is moved
-/// straight into the caller-provided `Frame`. EOS frames are absorbed
-/// (the per-shard `eos` flag is set) so callers never observe them.
-///
-/// ─────────────────────────── Production contracts ───────────────────────────
-///
-/// **Threading model**
-///   * Single consumer thread per shard (the design also supports a
-///     single consumer thread for all shards, which is the tested case).
-///   * No threads are spawned by this class. It never blocks.
-///   * Producers (one per shard, separate processes) push concurrently
-///     into the SPSC rings; that path is `coderoast::ipc::channel`'s
-///     responsibility, not ours.
-///
-/// **Backpressure semantics**
-///   * SHM full → producer side handles per `BackpressurePolicy`
-///     (Block/DropOldest/DropNewest). The drainer never sees SHM-full;
-///     it only sees "ring empty" via `try_pop` returning false.
-///   * Consumer slow → ring fills up; producer either spins (Block) or
-///     drops frames (Drop*). Either way, the drainer's `try_pull` keeps
-///     returning whatever is in the ring at its own pace.
-///
-/// **Determinism contract**
-///   * Per-shard order is preserved (SPSC FIFO).
-///   * Cross-shard order is NOT preserved here — that is step 2's job.
-///   * Output is deterministic given identical SHM contents and identical
-///     `try_pull` interleavings. There is no randomness, no time-based
-///     decision, no allocation that could fail differently between runs.
-///
-/// **Frame lifetime / move semantics**
-///   * `try_pop` moves the frame out of the SHM ring slot into the
-///     caller-provided `Frame&`. Zero-copy aside from the in-slot move
-///     (DefaultLineFrame is trivially relocatable; the payload bytes are
-///     copied because they live in the slot).
-///   * The caller owns the frame after a successful `try_pull`. The
-///     drainer keeps no reference to it.
-///
-/// **Error handling strategy**
-///   * Construction-time invariants (`shard_count == 0`, channel open
-///     failure) fail fast via exceptions.
-///   * Run-time errors are absent by construction: `try_pop` returning
-///     false is "no data" and does not propagate.
-///   * Poison frames (corrupted header) are NOT detected here; downstream
-///     stages MAY detect them via flag inspection.
-///
-/// **Allocation strategy**
-///   * No allocations on the hot path. `try_pull` is allocation-free.
-///   * One-time allocations in the constructor only: channel vector,
-///     shard state vector, per-shard atomic block.
-///
-/// **Observability**
-///   * `metrics()` returns a `DrainerMetrics` snapshot with counters
-///     updated by `memory_order_relaxed` writes — cost is one atomic
-///     increment per `try_pull` regardless of outcome.
-///   * `set_observer()` registers a callback invoked on discrete
-///     lifecycle events only (EOS observed); never on the per-frame
-///     hot path. Default = no observer = exactly one branch per event.
-///
-/// **Lifecycle / shutdown**
-///   * Construction opens every shard channel. Failure throws and rolls
-///     back (RAII destructors close already-opened channels).
-///   * `close()` is idempotent and may be called before destruction to
-///     release SHM handles explicitly.
-///   * Destruction calls `close()` automatically.
-///
-/// **Strict invariants (do NOT relax):**
-///   * `try_pull` never blocks. It returns `false` when the shard's SHM
-///     ring is empty *or* the shard has already observed EOS.
-///   * EOS frames are NOT returned to the caller. They flip the per-shard
-///     `eos` flag and `try_pull` returns `false`.
-///   * Window-seal frames ARE returned. They carry the per-window
-///     watermark the reorder buffer's seal-driven frontier gates on.
-///   * No causal-ordering / watermark logic lives here — that is step 2's
-///     responsibility. This stage only knows about SHM transport state.
+// invariant: one channel per shard; no thread, no mutex and no queue of its own, and try_pull never
+// blocks.
+// invariant: per-shard order is the ring's FIFO; cross-shard order is step 2's.
+// post: construction opens every shard or throws, closing what it already opened.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class ShmTransportDrainer
 {
@@ -358,16 +211,9 @@ class ShmTransportDrainer
         return shards_.size();
     }
 
-    /// Non-blocking pop from shard `shard_id`'s SPSC SHM ring.
-    ///
-    /// End-of-stream is now a *channel state*, not an in-band sentinel.
-    /// When the producer transitions the channel to Closing/Closed
-    /// (graceful) or Aborted (forced), `try_pop_status` returns
-    /// `PopStatus::Closed` / `PopStatus::Aborted` once the ring is
-    /// empty.  The drainer flips the per-shard `eos` flag exactly once
-    /// on that transition.
-    ///
-    /// Returns true iff a data/seal frame was popped.
+    // invariant: end of stream is the channel's state, not an in-band sentinel.
+    // post: true only for a data or seal frame; an EOS is absorbed, flips the shard's eos flag
+    // exactly once and returns false.
     [[nodiscard]] bool try_pull(std::size_t shard_id, Frame& out)
     {
         auto& shard{*shards_[shard_id]};
@@ -390,8 +236,6 @@ class ShmTransportDrainer
         if (status == coderoast::ipc::PopStatus::Closed ||
             status == coderoast::ipc::PopStatus::Aborted)
         {
-            // Producer has signalled end-of-stream out-of-band.  Flip
-            // the per-shard eos flag exactly once and notify observers.
             bool expected{false};
             if (shard.eos.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
             {
@@ -407,8 +251,7 @@ class ShmTransportDrainer
         return shards_[shard_id]->eos.load(std::memory_order_acquire);
     }
 
-    /// True once every shard has observed EOS. The reorder buffer must
-    /// still drain its own per-shard min-heaps after this returns true.
+    // post: every shard has seen EOS; the reorder buffer's heaps may still hold frames.
     [[nodiscard]] bool transport_complete() const noexcept
     {
         for (const auto& shard : shards_)
@@ -432,8 +275,6 @@ class ShmTransportDrainer
         return out;
     }
 
-    /// Snapshot of the hot-path counters. Internally inconsistent under
-    /// heavy concurrency by design (relaxed atomics, no global lock).
     [[nodiscard]] DrainerMetrics metrics() const noexcept
     {
         return DrainerMetrics{
@@ -444,15 +285,13 @@ class ShmTransportDrainer
         };
     }
 
-    /// Register a discrete-event observer (EOS transitions). Replace
-    /// with an empty function to detach. Thread-safety: callers must not
-    /// race this with `try_pull`; intended for construction-time wiring.
+    // pre: not called concurrently with try_pull — this is construction-time wiring.
     void set_observer(ConsumerObserver observer)
     {
         observer_ = std::move(observer);
     }
 
-    /// Close every channel. Idempotent.
+    // post: idempotent; the destructor calls it.
     void close() noexcept
     {
         for (auto& chan : channels_)
@@ -487,83 +326,10 @@ class ShmTransportDrainer
     std::atomic<std::uint64_t> seals_observed_{0};
 };
 
-// ─────────── from causal_reorder_buffer.hpp ───────────
-
-/// **Step 2 of the pull-based causal SHM consumer pipeline.**
-///
-/// Owns a per-shard CausalKey min-heap and runs a k-way merge over the
-/// shard heads to emit frames in global causal order.
-///
-/// ─────────────────────────── Production contracts ───────────────────────────
-///
-/// **Threading model**
-///   * Single owner thread: the same thread that calls `try_select`.
-///   * Holds no internal threads. No mutex anywhere.
-///   * Reads the drainer's per-shard EOS flag via the public `shard_eos`
-///     accessor (acquire load).
-///
-/// **Backpressure semantics**
-///   * Pure pull. Never blocks. `try_select` returns false when the
-///     frontier is incomplete; the caller decides whether to poll again
-///     or yield.
-///   * Per-shard heaps grow with backlog when other shards stall. There
-///     is no hard cap — under sustained imbalance, RSS grows. This is
-///     intentional: the drainer/producer side already enforces the SHM
-///     backpressure policy; throwing it away here would create silent
-///     data loss.
-///
-/// **Determinism contract**
-///   * Output is deterministic given identical drainer input. Ties are
-///     broken by `(logical_tick, agent_order, intra_agent_index, shard_id)`
-///     in that order, which is a total order (`causal_less`; `header.sequence`
-///     is the race-assigned carve-out field and is deliberately not consulted).
-///   * The frontier gate guarantees no late frame from any non-EOS shard
-///     can be "passed" by a later frame from another shard.
-///
-/// **Frame lifetime / move semantics**
-///   * Frames are moved out of the drainer into the per-shard min-heap
-///     (`shards_[i].buffer.push(std::move(frame))`).
-///   * `try_select` moves the heap top out to the caller's frame.
-///     `priority_queue::top()` returns const-ref; we use a single
-///     `const_cast` to enable the move (the next `pop()` invalidates
-///     the slot). NO copies on the success path.
-///
-/// **Error handling strategy**
-///   * No exceptions thrown on the hot path. `refill` and `try_select`
-///     are `noexcept` in spirit (a `std::bad_alloc` from the heap push
-///     can propagate; in steady state allocations come from a small
-///     vector pool that pre-grows).
-///
-/// **Allocation strategy**
-///   * `std::priority_queue<Frame, std::vector<Frame>>` re-uses its
-///     internal vector. Once steady-state backlog stabilises, no more
-///     allocations happen.
-///   * `refill` and `try_select` perform zero heap allocations beyond
-///     the priority queue's growth.
-///
-/// **Observability**
-///   * `metrics()` returns a `ReorderMetrics` snapshot (relaxed atomics).
-///   * `set_observer()` registers a callback for `kFrontierBlock` and
-///     `kDrainComplete` discrete events. Off the per-frame hot path.
-///
-/// **Frontier rule (watermark gate):** the causally-earliest buffered
-/// candidate `best` (tick t) may be emitted only once no shard could still
-/// deliver a frame earlier than `best`. Each shard settles that in one of
-/// three ways: it is EOS, it holds a buffered candidate (so its earliest
-/// future frame is >= best), or its *watermark* — the highest tick it has
-/// produced — has already reached t. The watermark works because each shard
-/// emits a deterministic WindowSeal for *every* window, data-bearing or not,
-/// and a seal is a promise that nothing at or before its boundary tick
-/// remains on that shard. Only a non-EOS shard with an empty heap AND a
-/// watermark below t can still strand an earlier frame, so only that case
-/// blocks. Temporal progression is driven by seals, never by data volume;
-/// this is the only safe rule when a shard can be idle now and produce data
-/// later, and it lets the final same-tick seal batch drain at a PlayToTarget
-/// freeze where no EOS follows.
-///
-/// **Separation of concerns:** this stage knows nothing about transport
-/// (SHM rings, EOS frames). It pulls *opaque* frames from a
-/// `ShmTransportDrainer` via the narrow `try_pull/shard_eos/...` API.
+// refs: ADR-11.D4
+// invariant: a per-shard CausalKey min-heap merged k-way; single owner thread, no mutex.
+// invariant: the per-shard heaps are unbounded by design — capping here would drop frames
+// silently, and the ring's slot_count bounds the ring, never these heaps.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class CausalReorderBuffer
 {
@@ -579,9 +345,8 @@ class CausalReorderBuffer
     CausalReorderBuffer& operator=(CausalReorderBuffer&&) = delete;
     ~CausalReorderBuffer() = default;
 
-    /// Drain every fresh frame currently held by the transport drainer
-    /// into the per-shard min-heaps. Cheap and bounded: it pulls only
-    /// what is already buffered in-process; it never reaches into SHM.
+    // post: moves every frame the shards' rings currently hold into the per-shard heaps and raises
+    // each shard's watermark to the highest tick it has produced.
     void refill()
     {
         refills_.fetch_add(1U, std::memory_order_relaxed);
@@ -590,10 +355,6 @@ class CausalReorderBuffer
         {
             while (drainer_->try_pull(shard_id, frame))
             {
-                // Track the shard's watermark — the highest tick it has produced.
-                // Per-shard frames are causally non-decreasing, so this is the
-                // shard's last-pulled tick; it bounds the earliest frame the shard
-                // can still deliver, which the frontier gate relies on.
                 const auto tick{extract_causal_key(frame).logical_tick};
                 if (tick > shards_[shard_id].watermark_tick)
                 {
@@ -604,15 +365,14 @@ class CausalReorderBuffer
         }
     }
 
-    /// Attempt to select and pop the globally-earliest CausalKey across
-    /// all shard heads. Returns false when the frontier is incomplete
-    /// or no shard has a buffered candidate.
+    // invariant: the frontier gate — the earliest buffered candidate is emitted only once no
+    // non-EOS shard has an empty heap and a watermark below that candidate's tick.
+    // post: false when the frontier blocks or no shard holds a candidate.
     [[nodiscard]] bool try_select(Frame& out)
     {
         selects_attempted_.fetch_add(1U, std::memory_order_relaxed);
         refill();
 
-        // Pick the causally-earliest buffered candidate across all shard heads.
         std::size_t best{kNoIndex};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
@@ -628,8 +388,6 @@ class CausalReorderBuffer
         }
         if (best == kNoIndex)
         {
-            // Every heap is empty. If every shard is also EOS we are fully
-            // drained; otherwise we are simply waiting for the next frame.
             if (!drain_complete_notified_ && drained())
             {
                 drain_complete_notified_ = true;
@@ -638,16 +396,9 @@ class CausalReorderBuffer
             return false;
         }
 
-        // Watermark frontier gate. `best` may be emitted only once no other shard
-        // could still deliver a causally-earlier frame. A shard settles that in one
-        // of three ways: it is EOS (no more frames at all), it holds a buffered
-        // candidate (its earliest future frame is therefore >= best), or its
-        // watermark — the highest tick it has produced — has already reached best's
-        // tick, since every WindowSeal promises nothing at or before its boundary
-        // tick remains on that shard. Only a non-EOS shard with an empty heap AND a
-        // watermark below best's tick can still strand an earlier frame, so only
-        // that case blocks. This is what lets the final batch of same-tick window
-        // seals drain at a PlayToTarget freeze, where no EOS ever follows.
+        // assert: a shard settles by being EOS, by holding a candidate, or by a watermark that
+        // reached best's tick — a WindowSeal promises nothing earlier remains on that shard.
+        // note: this is what drains the final same-tick seal batch at a PlayToTarget freeze.
         const auto best_tick{extract_causal_key(shards_[best].buffer.top()).logical_tick};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
@@ -660,6 +411,7 @@ class CausalReorderBuffer
             }
         }
 
+        // note: priority_queue::top() is const and the pop right after invalidates the slot.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         out = std::move(const_cast<Frame&>(shards_[best].buffer.top()));
         shards_[best].buffer.pop();
@@ -668,8 +420,7 @@ class CausalReorderBuffer
         return true;
     }
 
-    /// True once every shard's transport has signalled EOS *and* every
-    /// per-shard min-heap is empty.
+    // post: every shard's transport signalled EOS and every per-shard heap is empty.
     [[nodiscard]] bool drained() const noexcept
     {
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
@@ -716,7 +467,6 @@ class CausalReorderBuffer
         };
     }
 
-    /// Register a discrete-event observer. See drainer documentation.
     void set_observer(ConsumerObserver observer)
     {
         observer_ = std::move(observer);
@@ -731,19 +481,10 @@ class CausalReorderBuffer
         }
     }
 
-    /// The reconciled-order determinism invariant, checked rather than assumed.
-    ///
-    /// CLAUDE.md § Determinism & Replay: the causal order AFTER reconciliation is exactly what
-    /// MUST hold. CausalKey is a unique total order, so the merge's output must be STRICTLY
-    /// increasing. A tie means the uniqueness premise broke upstream (a new producer numbering
-    /// into an existing `agent_order` namespace, a reused `intra_agent_index`, or two control
-    /// frames from one shard in one window); an inversion means the frontier gate released a
-    /// frame before a causally-earlier one had settled. Both are determinism defects that would
-    /// otherwise surface far downstream as an unreproducible replay, so this terminates at the
-    /// point of detection with both keys in hand rather than corrupting the stream silently.
-    ///
-    /// Cost is one comparison per emitted frame, against a select that is already O(shards) —
-    /// determinism outranks the micro-optimization of eliding it.
+    // refs: ADR-11.D3
+    // invariant: the emitted keys are strictly increasing; a tie means the key's uniqueness premise
+    // broke upstream, an inversion means the frontier released a frame too early.
+    // note: one comparison per frame against an O(shards) select — determinism outranks it.
     void check_causal_monotonicity(const Frame& frame)
     {
         const auto key{extract_causal_key(frame)};
@@ -778,7 +519,6 @@ class CausalReorderBuffer
     {
         bool operator()(const Frame& lhs, const Frame& rhs) const noexcept
         {
-            // Min-heap: top() is causally earliest.
             return causal_less(rhs, lhs);
         }
     };
@@ -786,9 +526,8 @@ class CausalReorderBuffer
     struct ShardState
     {
         std::priority_queue<Frame, std::vector<Frame>, Greater> buffer{};
-        // Highest tick pulled from this shard so far. A shard's future frames are
-        // causally >= this, so it bounds the earliest frame the shard can still
-        // deliver — the basis of the watermark frontier gate in try_select().
+        // invariant: per-shard frames are causally non-decreasing, so the highest tick pulled
+        // bounds the earliest frame that shard can still deliver.
         std::uint64_t watermark_tick{0};
     };
 
@@ -799,7 +538,6 @@ class CausalReorderBuffer
     ConsumerObserver observer_;
     bool drain_complete_notified_{false};
 
-    // Reconciled-order invariant state (see check_causal_monotonicity).
     CausalKey last_emitted_key_{};
     bool has_emitted_{false};
 
@@ -809,50 +547,14 @@ class CausalReorderBuffer
     std::atomic<std::uint64_t> frontier_blocks_{0};
 };
 
-// ─────────── from frame_emitter.hpp ───────────
-/// **Step 3 of the pull-based causal SHM consumer pipeline.**
-///
-/// Drives the reorder buffer and surfaces emit-ready frames to the caller.
-/// Optionally filters out IPC control frames (window seals; EOS frames
-/// are already absorbed by the drainer) so downstream code only sees
-/// payload frames.
-///
-/// ─────────────────────────── Production contracts ───────────────────────────
-///
-/// **Threading model**
-///   * Single owner thread (the caller of `try_next`).
-///   * Holds no internal threads, no mutex.
-///
-/// **Backpressure**
-///   * Pure pull. Never blocks. `try_next` returns false when the buffer
-///     cannot select a frame.
-///
-/// **Determinism**
-///   * Output order is identical to the reorder buffer's output minus
-///     filtered control frames. Filter decision is purely a function of
-///     `frame.header.flags` — deterministic.
-///
-/// **Frame lifetime / move semantics**
-///   * Frames are moved out of the reorder buffer's heap into a local
-///     `candidate`, then `std::move`d into the caller's `out`. Two moves
-///     total per emitted frame, no copies.
-///
-/// **Error handling**
-///   * No exceptions. Counters are best-effort relaxed atomics for fast
-///     observability.
-///
-/// **Allocation**
-///   * Zero allocations on the hot path.
-///
-/// Keeps emission diagnostics (`emitted()`, `control_dropped()`,
-/// `last_sequence()`) here, away from the ordering logic, so step 2 stays
-/// purely about correctness.
+// invariant: single owner thread, no thread and no mutex of its own; two moves per emitted frame
+// and no allocation.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> class FrameEmitter
 {
   public:
     struct Config
     {
-        /// When false (default) `try_next` silently skips window-seal frames.
+        // invariant: false skips window seals; EOS never reaches here, the drainer absorbs it.
         bool emit_control_frames{false};
     };
 
@@ -867,9 +569,7 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
     FrameEmitter& operator=(FrameEmitter&&) = delete;
     ~FrameEmitter() = default;
 
-    /// Pop the next emit-ready frame in causal order. Returns false when
-    /// no frame is currently emit-ready (frontier incomplete, or fully
-    /// drained).
+    // post: false when the frontier is incomplete or the pipeline is fully drained.
     [[nodiscard]] bool try_next(Frame& out)
     {
         Frame candidate{};
@@ -921,46 +621,8 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame> cl
     std::uint64_t last_sequence_{0};
 };
 
-// ─────────── from causal_shm_consumer.hpp ───────────
-/// Thin facade composing the three-step pull-based causal SHM consumer:
-///
-///   * Step 1 — `ShmTransportDrainer`  (threadless SHM pop, never stalls
-///                                      on ordering, never blocks)
-///   * Step 2 — `CausalReorderBuffer`  (global CausalKey min-heap)
-///   * Step 3 — `FrameEmitter`         (control-frame filter + diagnostics)
-///
-/// The whole pipeline runs on the caller's thread inside `try_next()`:
-/// the emitter asks the reorder buffer for the next causally-earliest
-/// frame; the buffer round-robin-polls every shard's SHM ring via the
-/// drainer; the drainer pops directly from each `SharedMemorySpscChannel`.
-/// There are no background threads, no mutexes, and no internal queues —
-/// frames move from SHM ring → per-shard heap → caller via two moves.
-///
-/// All callers that only need "give me the next causally-earliest data
-/// frame from this sharded SHM channel" should use this facade and
-/// never instantiate the sub-objects directly. Advanced callers (e.g. a
-/// test that injects a fault between stages) may compose the three
-/// classes themselves.
-///
-/// ─────────────────────────── Production contracts ───────────────────────────
-///
-/// **Threading model.** Single owner thread. The facade spawns no
-/// threads and holds no mutex. Backpressure, determinism, frame lifetime
-/// and error-handling contracts are inherited from the three sub-stages;
-/// see their individual headers.
-///
-/// **Observability.** Call `metrics()` for a `ConsumerMetrics` snapshot
-/// aggregating the three sub-stages' atomic counters. Register a
-/// `ConsumerObserver` via `set_observer()` to receive discrete events
-/// (shard EOS, frontier block, drain complete). Both are off the
-/// per-frame hot path.
-///
-/// **Lifecycle.** Construction opens every shard channel; failure
-/// throws and rolls back via RAII. `close()` releases the SHM handles
-/// explicitly; destruction does the same. EOS propagation: producers
-/// push an EOS frame to every shard; the drainer absorbs them; once
-/// every shard is EOS and every heap is empty, `all_shards_done()`
-/// returns true and the observer fires `kDrainComplete` exactly once.
+// invariant: the whole pipeline runs on the caller's thread inside try_next() — no thread, no
+// mutex and no queue anywhere in it.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class CausalShmConsumer
 {
@@ -992,8 +654,7 @@ class CausalShmConsumer
     {
     }
 
-    // Non-copyable, non-movable: buffer_ holds a raw pointer to drainer_,
-    // and emitter_ holds a raw pointer to buffer_.
+    // invariant: buffer_ points at drainer_ and emitter_ at buffer_, so a move would dangle.
     CausalShmConsumer(const CausalShmConsumer&) = delete;
     CausalShmConsumer& operator=(const CausalShmConsumer&) = delete;
     CausalShmConsumer(CausalShmConsumer&&) = delete;
@@ -1005,8 +666,8 @@ class CausalShmConsumer
         return emitter_.try_next(out);
     }
 
-    /// EOS-based completion predicate. True only after every shard has
-    /// observed EOS and the reorder buffer is empty.
+    // post: every shard EOS and the reorder buffer empty — the condition on which try_select
+    // raises kDrainComplete once.
     [[nodiscard]] bool all_shards_done() const noexcept
     {
         return buffer_.drained();
@@ -1042,8 +703,6 @@ class CausalShmConsumer
         drainer_.close();
     }
 
-    /// Aggregate snapshot of every sub-stage's counters. See
-    /// `ConsumerMetrics` documentation for relaxed-atomic semantics.
     [[nodiscard]] ConsumerMetrics metrics() const noexcept
     {
         return ConsumerMetrics{
@@ -1053,15 +712,13 @@ class CausalShmConsumer
         };
     }
 
-    /// Register the same observer with every sub-stage. Pass an empty
-    /// `ConsumerObserver` to detach.
+    // post: registers with the drainer and the reorder buffer; the emitter raises no event.
     void set_observer(ConsumerObserver observer)
     {
         drainer_.set_observer(observer);
         buffer_.set_observer(std::move(observer));
     }
 
-    // Sub-component accessors for advanced diagnostics / tests.
     [[nodiscard]] Drainer& drainer() noexcept
     {
         return drainer_;
@@ -1081,64 +738,9 @@ class CausalShmConsumer
     Emitter emitter_;
 };
 
-// ─────────── from window_closed_consumer.hpp ───────────
-/// **Opt-in WindowClosed coalescing adapter over `CausalShmConsumer`.**
-///
-/// Background
-/// ----------
-/// The sharded SHM transport emits N independent `WindowSeal` frames per
-/// closed window (one per shard). Users who only care about "is this window
-/// finished" must collect all N seals before acting — the per-shard frames
-/// also arrive in non-deterministic order (each shard's seal travels through
-/// its own SHM ring and the merge step is pull-based; see Gate 3 in
-/// `logcraft/core/tests/determinism/test_determinism_shm_gate.cpp` for the
-/// detailed rationale).
-///
-/// This adapter solves both problems with a single coalescing layer:
-///
-///   * Per-shard `WindowSeal` frames are **swallowed** — they never reach
-///     the caller's `Frame` channel.
-///   * After the Nth shard's seal is observed for a given `window_id`, the
-///     adapter emits **one synthesized `WindowClosed{window_id, logical_tick}`
-///     event** in their place.
-///
-/// Users who want raw per-shard seals (diagnostics, determinism gates,
-/// custom barrier logic) should keep using `CausalShmConsumer` directly with
-/// `emit_control_frames=true`.
-///
-/// Pairing with InSight's MetaLog window
-/// -------------------------------------
-/// To get exactly one barrier event per MetaLog close, configure the
-/// scenario output's `shm_window_seal_interval_seconds` to equal the
-/// MetaLog window duration (default 25 s on the server, see
-/// `default_insight_pipeline_config()` and `pyramid.window_ns`). The
-/// adapter will then emit one `WindowClosed` per 25 s wall window, in
-/// lock-step with the engine's window close. Mismatched cadences are
-/// permitted — the adapter simply produces one event per "all-shards-sealed"
-/// signal regardless of how that maps to upstream windows.
-///
-/// Ordering & determinism contract
-/// -------------------------------
-/// * `WindowClosed` events appear in increasing `window_id` order. The
-///   Nth-seal-of-window-K event is emitted strictly after the (N-1)th
-///   seal of K is observed.
-/// * Any data frame returned **before** a `WindowClosed{K}` event has
-///   `logical_tick < seal_tick(K)` — the underlying causal merge upholds
-///   this invariant.
-/// * Two replays of the same scenario emit a byte-identical sequence of
-///   `WindowClosed` events (1 per window, with deterministic `(window_id,
-///   logical_tick)`). Data-frame order between events is likewise
-///   byte-deterministic: those frames are post-merge, and `causal_less`'s
-///   `shard_id` tie-break lifts the merge from a deterministic multiset to a
-///   deterministic byte sequence (see `CausalKey`).
-///
-/// Single-thread, allocation-free hot path
-/// ---------------------------------------
-/// Owned and called by a single thread (the caller of `try_next`).
-/// Internal seal-counter map grows at most `concurrent_in_flight_windows`
-/// entries — for the standard 1-window-at-a-time flow this is a single
-/// bucket the unordered_map allocates lazily. Successful frame emission
-/// performs zero allocations.
+// invariant: the N per-shard WindowSeals of a window are swallowed and replaced by one synthesized
+// WindowClosed after the Nth arrives.
+// note: raw per-shard seals stay reachable through CausalShmConsumer directly.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class WindowClosedConsumer
 {
@@ -1151,11 +753,12 @@ class WindowClosedConsumer
         std::uint64_t logical_tick{0};
     };
 
+    // invariant: kNone means nothing is emittable yet, not that the stream ended.
     enum class NextKind : std::uint8_t
     {
-        kNone,         ///< Nothing emittable yet — caller should retry / yield.
-        kFrame,        ///< `out_frame` is populated (data frame, non-control).
-        kWindowClosed, ///< `out_window` is populated; all shards sealed this window.
+        kNone,
+        kFrame,
+        kWindowClosed,
     };
 
     struct Config
@@ -1167,9 +770,8 @@ class WindowClosedConsumer
         : shard_count_{config.underlying.shard_count},
           underlying_{[&config]
                       {
-                          // Force the adapter to
-                          // observe seals; data-frame
-                          // emission stays normal.
+                          // invariant: the underlying consumer is forced to emit control frames —
+                          // this adapter is their only reader.
                           auto cfg{std::move(config.underlying)};
                           cfg.emit_control_frames = true;
                           return cfg;
@@ -1183,19 +785,12 @@ class WindowClosedConsumer
     WindowClosedConsumer& operator=(WindowClosedConsumer&&) = delete;
     ~WindowClosedConsumer() = default;
 
-    /// Try to emit either a data frame or a synthesized `WindowClosed` event.
-    ///
-    /// Returns `NextKind::kNone` when no frame is ready (caller should yield
-    /// or poll again). Returns `kFrame` with `out_frame` populated for data
-    /// frames. Returns `kWindowClosed` with `out_window` populated when the
-    /// Nth shard's seal has been observed for a window.
-    ///
-    /// At most one event is produced per call — multiple sealing seals in
-    /// the same call still yield exactly one `WindowClosed` per window per
-    /// call; the next window's event is emitted on the next call.
+    // post: at most one event per call; several completing seals in one call still yield one
+    // WindowClosed, and the next comes on the next call.
+    // invariant: a window's entry is erased when its Nth seal lands, so the map holds only
+    // partially sealed windows.
     [[nodiscard]] NextKind try_next(Frame& out_frame, WindowClosed& out_window)
     {
-        // Drain seals until either a data frame is found or a window completes.
         Frame scratch{};
         for (;;)
         {
@@ -1218,13 +813,11 @@ class WindowClosedConsumer
             ++seals_observed_;
             if (it->second >= shard_count_)
             {
-                // Final shard has sealed — synthesize the WindowClosed event.
                 seal_counts_.erase(it);
                 ++windows_closed_;
                 out_window = WindowClosed{.window_id = window_id, .logical_tick = logical_tick};
                 return NextKind::kWindowClosed;
             }
-            // Otherwise loop — swallow the seal and look for the next event.
         }
     }
 

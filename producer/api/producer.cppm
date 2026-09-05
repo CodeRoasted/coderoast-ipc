@@ -1,6 +1,3 @@
-// coderoast.ipc.producer — PURE named module (1.5.1 unwrap). Header-only: the former
-// shared_memory_producer.hpp content now lives here. std via import std; core frame types via
-// import coderoast.ipc.core (was the textual coderoast/ipc/frame.hpp include).
 export module coderoast.ipc.producer;
 import std;
 import coderoast.ipc.core;
@@ -8,8 +5,7 @@ import coderoast.ipc.core;
 export namespace coderoast::ipc::producer
 {
 
-// Stable per-agent hash for frame headers (portable across restarts).
-// Uses FNV-1a 32-bit.
+// post: FNV-1a 32-bit, so one agent name hashes identically across processes and runs.
 [[nodiscard]] inline std::uint32_t stable_agent_id(std::string_view agent_name) noexcept
 {
     constexpr std::uint32_t kOffsetBasis{2166136261U};
@@ -23,11 +19,9 @@ export namespace coderoast::ipc::producer
     return hash;
 }
 
-// Frame builder: tracks transport + per-shard sequences and assembles frame
-// headers. Callers provide the payload bytes; this class handles sequence and
-// header setup. The transport sequence is unique and useful for tracing/gap
-// detection; when multiple producer threads call build(), it reflects runtime
-// arbitration and is not a deterministic simulation-order key.
+// refs: ADR-11.D3
+// invariant: header.sequence is the cross-shard transport counter — unique, good for gap
+// detection, and never a simulation-order key.
 template <typename Frame = DefaultLineFrame> class FrameBuilder
 {
   public:
@@ -49,14 +43,11 @@ template <typename Frame = DefaultLineFrame> class FrameBuilder
     FrameBuilder& operator=(FrameBuilder&&) = default;
     ~FrameBuilder() = default;
 
-    // Build a frame header with the next transport and per-shard sequences.
-    // Caller provides shard_id (modulo'd vs shard_count internally),
-    // timestamp, payload_size, agent ID, and frame flags.
-    // Returns the assembled frame with populated header.
-    //
-    // Takes no format: the IntentFormat is intrinsic to the payload bytes and canon recovers it
-    // from them (ADR-22 — see coderoast.ipc.core). A producer that could stamp the format here
-    // would be handing the consumer an answer no real log carries.
+    // refs: ADR-22.D1
+    // pre: one caller thread per shard_id % shard_count_ slot — the per-shard sequences are
+    // unsynchronised; only the transport sequence is atomic.
+    // invariant: no format is stamped: the IntentFormat is intrinsic to the payload bytes and canon
+    // must recover it from them.
     [[nodiscard]] Frame build(std::uint32_t shard_id, std::uint64_t timestamp_unix_ns,
                               std::uint32_t payload_size, std::uint32_t agent_id_hash,
                               LineFrameFlags flags = LineFrameFlags{}) noexcept

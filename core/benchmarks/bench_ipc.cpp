@@ -1,9 +1,10 @@
-#include <unistd.h> // POSIX getpid() — not in import std
+// note: getpid() is POSIX and not in `import std`, so this header stays textual.
+#include <unistd.h>
 
 #include <benchmark/benchmark.h>
 
 import std;
-import coderoast.ipc.core; // ADR-3.D4: ipc is a pure module now (headers deleted)
+import coderoast.ipc.core;
 
 namespace
 {
@@ -48,9 +49,7 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
 BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
 } // namespace
 
-// Custom entry point (was BENCHMARK_MAIN()) so the run disables ASLR first — address-layout
-// randomization otherwise adds run-to-run timing noise (Google Benchmark's "ASLR is enabled"
-// warning).
+// note: the re-exec drops ASLR first — layout randomization is run-to-run timing noise.
 int main(int argc, char** argv)
 {
     benchmark::MaybeReenterWithoutASLR(argc, argv);

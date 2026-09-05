@@ -1,31 +1,14 @@
-// coderoast.ipc.core — PURE named module (1.5.1 unwrap of the §8.1 wrapper). Header-only: the
-// former api/coderoast/ipc/{frame,channel}.hpp content now lives in this module interface. std via
-// `import std`.
-//
-// ADR-3.D4 cascade rule (errno-in-module): the POSIX shm syscalls touch C MACROS (errno, O_*,
-// PROT_*, MAP_*) that CANNOT reach a module purview — `import std` poisons libc's include guards so
-// a textual GMF `#include <cerrno>` no-ops, and macros never cross a module boundary regardless. So
-// every syscall
-// + macro lives in the TEXTUAL implementation unit coderoast_ipc_core_impl.cpp (own GMF, NO import
-// std); this interface holds only the non-template `shm_*` declarations, crossing the
-// boundary with primitives only (int/size_t/void*/const char*) — no std class type unifies across
-// import-std↔textual. detail is a SEALED non-export namespace (ADR-3.D4): consumers get the public
-// surface, not the helpers.
 export module coderoast.ipc.core;
 import std;
 
-// ── Public surface: frame + channel data types ──────────────────────────────
 export namespace coderoast::ipc
 {
 
 inline constexpr std::uint32_t kIpcAbiVersion{3U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
-// ── Shard channel naming: the WIRE CONTRACT, one definition ─────────────────
-// Producer and consumer must derive the same channel name from the same (base, shard_id)
-// or they open different segments and the pipeline silently connects to nothing. That makes
-// this a contract, not a formatting helper — it lives here, in the module BOTH sides already
-// import, so the two ends cannot drift.
+// invariant: both ends derive a shard's segment name from (base, shard_id) here; a second
+// definition would silently open two different segments.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
@@ -34,31 +17,9 @@ inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
     return name;
 }
 
-// ── Why there is no `FrameFormat` here (ADR-22) ─────────────────────────────
-// A per-line IntentFormat tag USED to ride this header. It was erased, and the rule that erased it
-// governs every future field on this transport:
-//
-//   The transport carries exactly the facts the bytes cannot carry, and nothing they can.
-//
-// The IntentFormat is INTRINSIC — the bytes carry it (a JSON line looks like JSON; a GHA log
-// contains
-// `##[group]Run `), and canon MUST recover it from them, because bytes are all a real log gives it.
-// A real GHA log arrives over HTTP with no frame header. So a transport that hands canon the answer
-// is a CHEAT CHANNEL: the moment anything reads such a tag, the LogCraft→InSight path is measuring
-// a privileged channel that does not exist in production, and every calibration number it produces
-// is optimistic by an unmeasured amount. The moat is that canon recovers intent FROM BYTES.
-//
-// The IntentChannel (SharedChannelHeader::intent_channel, below) is the OPPOSITE case and is
-// carried: no byte carries it, so someone must declare it — and SHM forwards that declaration
-// rather than inventing it, leaving both paths equally informed. Erasing one field and adding the
-// other is ONE rule applied in two directions, not an inconsistency.
-//
-// The test for any future field here: can a real log's bytes carry this fact? Yes ⇒ the transport
-// MUST NOT carry it. No ⇒ it may.
-
-// uint16_t is intentional: stable IPC ABI (paired with `reserved` to
-// keep the header free of implicit padding — see LineFrameHeader).
-enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
+// note: uint16_t pairs with LineFrameHeader::reserved to keep the header padding-free.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class LineFrameFlags : std::uint16_t
 {
     kLineFrameFlagNone = 0,
     kLineFrameFlagTruncated = 1U << 0U,
@@ -84,6 +45,9 @@ enum class LineFrameFlags : std::uint16_t // NOLINT(performance-enum-size)
            has_flag(flags, LineFrameFlags::kLineFrameFlagEndOfStream);
 }
 
+// refs: ADR-22.D1, ADR-22.D4
+// invariant: the wire carries only facts the bytes cannot: the intent FORMAT is intrinsic and stays
+// out, the intent CHANNEL is extrinsic and is forwarded.
 struct LineFrameHeader
 {
     std::uint64_t sequence{0};
@@ -98,10 +62,8 @@ struct LineFrameHeader
     std::uint32_t intra_agent_index{0};
     std::uint32_t shard_id{0};
     LineFrameFlags flags{LineFrameFlags::kLineFrameFlagNone};
-    // Explicit tail padding, sized so the header has NO implicit padding (asserted below). The
-    // erased FrameFormat used to be the uint16 that paired with `flags`; `reserved` takes that slot
-    // rather than letting the compiler insert 2 anonymous bytes, keeping the "no padding" property
-    // structural.
+    // invariant: explicit tail padding, sized so LineFrameHeader tiles exactly and the compiler
+    // inserts no implicit hole.
     std::uint16_t reserved{0};
 };
 
@@ -117,17 +79,11 @@ using DefaultLineFrame = LineFrame<kDefaultLineFramePayloadBytes>;
 
 static_assert(std::is_trivially_copyable_v<LineFrameHeader>);
 static_assert(std::is_trivially_copyable_v<DefaultLineFrame>);
-// The header is memcpy'd across a process boundary, so implicit padding would put INDETERMINATE
-// bytes on the wire — unreadable to a consumer that ever inspected them, and a bit-identity hazard
-// for anything that hashes a frame. `reserved` exists to make the property hold structurally; this
-// asserts it stays true, so a future field that reintroduces a hole fails the build instead of
-// shipping.
 static_assert(std::has_unique_object_representations_v<LineFrameHeader>,
               "LineFrameHeader has implicit padding — size the trailing `reserved` field so the "
               "members tile the struct exactly (an IPC header is memcpy'd; padding bytes are "
               "indeterminate on the wire)");
 
-// Concept satisfied by LineFrame<N> (and any user type with the same header layout).
 template <typename F>
 concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) {
     { frame.header.sequence } -> std::convertible_to<std::uint64_t>;
@@ -140,15 +96,11 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) 
     { frame.header.payload_size } -> std::convertible_to<std::uint32_t>;
 };
 
-inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL}; // CRIPCSPS
+inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL};
 inline constexpr std::uint32_t kSharedChannelAbiVersion{5U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
-// Capacity of SharedChannelHeader::intent_channel, including the NUL terminator. A channel name is
-// a short package-declared identifier ("annotated", "stripped"); 32 leaves generous headroom while
-// keeping the header a fixed-layout POD. A longer name is REFUSED at open (never truncated — a
-// truncated name would either fail the consumer's vocabulary check far from its cause, or, worse,
-// silently alias another declared name).
+// invariant: capacity including the NUL; a longer name is refused at create(), never truncated.
 inline constexpr std::size_t kIntentChannelNameCapacity{32U};
 
 enum class BackpressurePolicy : std::uint8_t
@@ -166,58 +118,46 @@ enum class WaitStrategy : std::uint8_t
     ParkOnly,
 };
 
-/// Lifecycle state of a channel.  Stored in shared memory; both
-/// endpoints observe the same value via acquire loads.
+// invariant: Closed means the consumer drained every frame written before Closing; the value lives
+// in shared memory and both ends read it with acquire.
 enum class ChannelState : std::uint8_t
 {
-    Open = 0,    //< Producer may push, consumer may pop.
-    Closing = 1, //< Graceful close requested; no new pushes, drain in progress.
-    Closed = 2,  //< Consumer has drained every frame written before Closing.
-    Aborted = 3, //< Force-stop (terminal).  All blocked ops wake.
+    Open = 0,
+    Closing = 1,
+    Closed = 2,
+    Aborted = 3,
 };
 
-/// Outcome of a producer-side write attempt.
+// invariant: Full is also what DropNewest reports for a frame it dropped.
 enum class PushStatus : std::uint8_t
 {
-    Ok = 0,      //< Frame written to the ring.
-    Full = 1,    //< Ring full (non-blocking variant or DropNewest policy).
-    Closed = 2,  //< `close_graceful` was called; no further data accepted.
-    Aborted = 3, //< `close_abort` was called; producer must give up.
+    Ok = 0,
+    Full = 1,
+    Closed = 2,
+    Aborted = 3,
 };
 
-/// Outcome of a consumer-side read attempt.
+// invariant: Closed means the ring is empty AND the producer closed gracefully, so no further frame
+// will ever arrive.
 enum class PopStatus : std::uint8_t
 {
-    Ok = 0,      //< Frame popped.
-    Empty = 1,   //< Ring empty, channel still Open.
-    Closed = 2,  //< Ring empty and producer has gracefully closed; no
-                 //   further frames will ever arrive.
-    Aborted = 3, //< Channel was force-stopped.  Residual frames may be
-                 //   discarded or drained at consumer's discretion.
+    Ok = 0,
+    Empty = 1,
+    Closed = 2,
+    Aborted = 3,
 };
 
 struct ChannelConfig
 {
-    std::string name; // the SHM ring's name — NOT the intent_channel below
+    std::string name;
     std::size_t slot_count{kDefaultSharedChannelSlotCount};
     BackpressurePolicy backpressure{BackpressurePolicy::Block};
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
     bool unlink_before_create{true};
     bool unlink_on_destroy{false};
-    // The declared underlying IntentChannel this ring TRANSPORTS (ADR-22). Set by the producer
-    // at create(); the consumer reads it back off the header at open(). Empty = Unspecified (the
-    // producer did not declare), which is every non-dialect stream.
-    //
-    // Spelled in FULL, never bare `channel`: `name` above is this ring, and `channel` in this
-    // namespace means the ring throughout. The collision is not an accident to hide but the
-    // structure to state — the SHM channel CONTAINS an IntentChannel.
-    //
-    // WHY THE TRANSPORT MAY CARRY THIS, when it may not carry a format (ADR-22): the channel
-    // is EXTRINSIC. No byte carries it — a prose line is byte-identical across channels, which is
-    // exactly why it must be declared and cannot be recovered. So SHM FORWARDS the producer's
-    // declaration rather than inventing an answer, leaving the SHM path and the real `--channel`
-    // path equally informed. That is not a cheat. A format tag would be: the bytes carry the
-    // format, so handing it over would privilege this path over the real one.
+    // refs: ADR-22.D4
+    // invariant: the IntentChannel this ring transports, spelled in full because `name` above is
+    // the ring's own name. Empty means the producer declared nothing.
     std::string intent_channel;
 };
 
@@ -233,12 +173,9 @@ struct ChannelStats
 
 } // namespace coderoast::ipc
 
-// ── Internal helpers (SEALED, non-export) — uses the public data above ───────
-// NAMED namespace, NOT anonymous: these helpers are referenced by the INLINE channel
-// templates below, so a consumer instantiating those templates would expose them. An
-// anonymous namespace gives them TU-local linkage → "instantiation exposes TU-local entity"
-// under modules (ADR-3.D4). `detail` (non-export) seals them from consumers while giving
-// them module linkage. Do NOT let clang-tidy `misc-use-anonymous-namespace` revert this.
+// refs: ADR-3.D4
+// invariant: named and non-export, not anonymous: the inline channel templates below use these
+// helpers, so TU-local linkage would make an instantiation ill-formed.
 namespace coderoast::ipc
 {
 
@@ -275,11 +212,10 @@ inline void cpu_pause() noexcept
 
 inline constexpr std::size_t kCacheLineBytes{64U};
 
-// ── POSIX shm syscall wrappers — DEFINED in coderoast_ipc_core_impl.cpp ──────
-// Each owns one syscall + its C macros (errno, O_*, PROT_*, MAP_*) which cannot
-// live in this import-std interface (ADR-3.D4 cascade rule, see file header). The
-// boundary crosses primitives only; the throwing ones raise std::runtime_error
-// built inside the impl unit. fd helpers return a VALID descriptor or throw.
+// refs: ADR-3.D4, F-SRC-coderoast-ipc:core_impl.cpp
+// invariant: defined in the textual impl unit, which owns the POSIX macros this import-std
+// interface cannot see; the boundary crosses primitives only.
+// post: a valid descriptor or a throw — never a negative fd, here and at shm_open_existing.
 [[nodiscard]] int shm_open_create(const char* name);
 [[nodiscard]] int shm_open_existing(const char* name);
 void shm_truncate(int descriptor, std::size_t size);
@@ -294,16 +230,10 @@ struct alignas(kCacheLineBytes) Cursor
     std::atomic<std::uint64_t> value{0};
 };
 
-/// Shared-memory header layout.  Lives at the start of the SHM
-/// mapping; both endpoints see the same atomics.
-///
-/// Layout discipline: hot producer/consumer cursors are on their
-/// own cache lines; the state-machine fields share a separate line
-/// (touched only on close/abort, no false sharing with data path).
-// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding) Explicit padding for false sharing
+// invariant: lives at the start of the SHM mapping; the hot cursors sit on their own cache lines
+// and the state machine on another, so close/abort never false-shares.
 struct SharedChannelHeader
 {
-    // --- identity ---
     std::uint64_t magic{kSharedChannelMagic};
     std::uint32_t abi_version{kSharedChannelAbiVersion};
     std::uint32_t header_size{sizeof(SharedChannelHeader)};
@@ -311,50 +241,33 @@ struct SharedChannelHeader
     std::uint64_t slot_count{0};
     std::uint64_t slot_size{0};
 
-    // --- the transported IntentChannel (ADR-22) ---
-    // The declared underlying IntentChannel of the stream this ring carries, NUL-terminated ASCII;
-    // all-zero = Unspecified. CHANNEL-LEVEL, deliberately never per-frame: one IntentChannel per
-    // TREE is the contract, and a per-frame field would *permit* the multi-channel tree that
-    // contract forbids — as well as paying bytes per line for a fact that is constant per stream.
-    //
-    // Written once by the producer at create(), read once by the consumer at open(): a cold,
-    // header-only fact, out of the frame path entirely. It sits with slot_count/slot_size (the
-    // other create-time identity fields), not on a cache line with the hot cursors.
+    // refs: ADR-22.D4
+    // invariant: channel-level and never per-frame; written once at create(), read once at open();
+    // all-zero means Unspecified.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
-    // --- atomic control plane (isolated cache lines) ---
     alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
     alignas(kCacheLineBytes) std::atomic<std::uint32_t> parker_count{0};
 
-    // --- cursors ---
     Cursor write_sequence{};
     Cursor read_sequence{};
     Cursor closing_at{};
-    // --- stats (relaxed updates) ---
     Cursor dropped{};
     Cursor blocked_events{};
     Cursor wait_loops{};
 
-    // --- state machine ---
     alignas(kCacheLineBytes) std::atomic<std::uint8_t> state{
         static_cast<std::uint8_t>(ChannelState::Open)};
 };
 
 static_assert(alignof(SharedChannelHeader) >= kCacheLineBytes);
 
-/// Adaptive busy-wait helper.  See the WaitStrategy documentation
-/// at the top of the file for the per-strategy progression.
 class AdaptiveWait
 {
   public:
     explicit AdaptiveWait(WaitStrategy strategy) noexcept : strategy_{strategy} {}
 
-    /// Perform one wait iteration.
-    ///
-    /// `header` may be `nullptr`; when non-null and the strategy is
-    /// `AdaptivePark`, the late stages of the wait park on the
-    /// header's `wake_epoch` atomic.  Notifiers (push/pop/state
-    /// transition) bump `wake_epoch` to release parked threads.
+    // pre: `header` may be null; AdaptivePark then sleeps instead of parking on wake_epoch.
     void wait(SharedChannelHeader* header) noexcept
     {
         ++loops_;
@@ -399,10 +312,8 @@ class AdaptiveWait
             }
             if (header != nullptr)
             {
-                // Kernel-park on the wake_epoch.  Bump parker_count
-                // around the wait so the notifier side knows to
-                // actually wake us up.  Spurious wakeups are fine:
-                // the surrounding loop re-checks the condition.
+                // invariant: parker_count is raised across the park so a notifier knows a wake is
+                // owed; a spurious wake is safe because the caller's loop re-checks.
                 header->parker_count.fetch_add(1, std::memory_order_acq_rel);
                 const auto epoch{header->wake_epoch.load(std::memory_order_acquire)};
                 header->wake_epoch.wait(epoch, std::memory_order_acquire);
@@ -437,7 +348,6 @@ class AdaptiveWait
 
 } // namespace coderoast::ipc
 
-// ── Public surface: the shared-memory SPSC channel (uses detail) ─────────────
 export namespace coderoast::ipc
 {
 
@@ -472,10 +382,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
     ~SharedMemorySpscChannel() noexcept
     {
-        // Producer-side RAII guarantee: if the owning producer destructs
-        // without an explicit close, transition the channel to Closing
-        // so consumers observe end-of-stream instead of dangling on Open.
-        // Consumer-side handles must not initiate the close transition.
+        // post: a producer handle destructing without an explicit close leaves the channel Closing,
+        // so a consumer sees end-of-stream instead of a live Open.
         if (is_producer_ && header_ != nullptr && state() == ChannelState::Open)
         {
             close_graceful();
@@ -490,9 +398,9 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             throw std::invalid_argument("IPC slot_count must be greater than zero");
         }
 
-        // REFUSED, never truncated (ADR-22): a clipped channel name would reach the consumer
-        // as a different string — failing its vocabulary check far from the cause, or in the worst
-        // case aliasing another declared name and silently mis-gating recognition.
+        // refs: ADR-22.D4
+        // assert: refusing beats truncating — a clipped name aliases another declared channel or
+        // fails the consumer's vocabulary check far from here.
         if (config.intent_channel.size() >= kIntentChannelNameCapacity)
         {
             throw std::invalid_argument("IPC intent_channel name exceeds " +
@@ -519,10 +427,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         auto* header{new (channel.mapping_) SharedChannelHeader{}};
         header->slot_count = config.slot_count;
         header->slot_size = sizeof(Frame);
-        // Forward the producer's DECLARATION (ADR-22) — the ring encapsulates an
-        // IntentChannel, so it must say which. The array is value-initialised, so an empty
-        // declaration stays all-zero = Unspecified, and the copy leaves the NUL terminator in place
-        // (size < capacity, checked above).
+        // invariant: the array is value-initialised, so an empty declaration stays all-zero =
+        // Unspecified and the copy keeps the NUL (size < capacity, checked above).
         std::memcpy(header->intent_channel.data(), config.intent_channel.data(),
                     config.intent_channel.size());
         channel.header_ = header;
@@ -544,22 +450,19 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         channel.map_memory();
         channel.header_ = static_cast<SharedChannelHeader*>(channel.mapping_);
         channel.validate_header();
-        // is_producer_ stays false: consumer-opened handles must not
-        // drive state transitions on destruction.
         return channel;
     }
 
-    // The declared underlying IntentChannel this ring transports (ADR-22). Empty =
-    // Unspecified: the producer did not declare, so a consumer must not claim dialect depth from
-    // this stream — the same fail-closed-on-DEPTH posture as an undeclared `--channel`. Read off
-    // the header, so a consumer never has to be told out-of-band what it is already carrying.
+    // refs: ADR-22.D5
+    // post: empty means the producer declared nothing, and a consumer must then fail closed on
+    // dialect depth rather than assume a channel.
     [[nodiscard]] std::string_view intent_channel() const noexcept
     {
         if (header_ == nullptr)
         {
             return {};
         }
-        // NUL-terminated by construction (create() refuses a name that would fill the array).
+        // assert: NUL-terminated by construction — create() refuses a name that fills it.
         return std::string_view{header_->intent_channel.data()};
     }
 
@@ -594,8 +497,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return static_cast<std::size_t>(write - read);
     }
 
-    // -- State / lifecycle --------------------------------------------
-
     [[nodiscard]] ChannelState state() const noexcept
     {
         if (header_ == nullptr)
@@ -623,21 +524,15 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return state() == ChannelState::Aborted;
     }
 
-    /// Snapshot of the write_sequence at the moment graceful close was
-    /// requested.  Meaningful only when `state() != Open`.  Consumers
-    /// use it to detect "all data delivered" without an EOS frame.
+    // post: the write_sequence snapshot taken at close_graceful, meaningful only once state() is
+    // not Open; it is how a consumer detects delivery with no EOS frame.
     [[nodiscard]] std::uint64_t closing_at() const noexcept
     {
         return header_ == nullptr ? 0U : header_->closing_at.value.load(std::memory_order_acquire);
     }
 
-    /// Producer-side: signal "no more data will be written".  Atomic,
-    /// non-blocking, idempotent.  After this, push() returns Closed.
-    /// Consumers keep popping frames already in the ring; once their
-    /// read_sequence reaches `closing_at`, try_pop returns Closed.
-    ///
-    /// Safe to call from ANY thread (including a watchdog).  Cannot
-    /// override an Aborted state.
+    // post: idempotent, non-blocking, callable from any thread; later pushes return Closed, and it
+    // cannot downgrade an Aborted channel.
     void close_graceful() noexcept
     {
         if (header_ == nullptr)
@@ -653,15 +548,12 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                 header_->write_sequence.value.load(std::memory_order_acquire),
                 std::memory_order_release);
         }
-        // Always notify: a producer may be blocked in push() under
-        // Block policy; it must observe the state change and exit.
+        // assert: a producer parked in push() under Block must see the state change and exit.
         notify_state_change();
     }
 
-    /// Out-of-band cancel.  Transitions to Aborted (terminal), wakes
-    /// every parked thread.  In-flight frames may still be readable by
-    /// the consumer depending on its policy.  Safe to call from any
-    /// thread.
+    // post: terminal; every parked thread wakes and frames already in the ring may still be popped.
+    // Callable from any thread.
     void close_abort() noexcept
     {
         if (header_ == nullptr)
@@ -673,9 +565,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         notify_state_change();
     }
 
-    // -- Hot-path producer / consumer API -----------------------------
-
-    /// Non-blocking write.  Returns Ok / Full / Closed / Aborted.
     [[nodiscard]] PushStatus try_push_status(const Frame& frame) noexcept
     {
         const auto _state{state()};
@@ -695,16 +584,14 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return PushStatus::Ok;
     }
 
-    /// Backpressured write honouring the configured policy.  Block
-    /// policy waits via the configured WaitStrategy and is cancellable
-    /// by close_graceful / close_abort.
+    // post: under Block, waits on the configured WaitStrategy and is cancellable by
+    // close_graceful() or close_abort().
     [[nodiscard]] PushStatus push_status(const Frame& frame) noexcept
     {
         if (policy_ == BackpressurePolicy::DropNewest)
         {
             return try_push_status(frame);
         }
-        // Block policy.
         AdaptiveWait wait{wait_strategy_};
         bool blocked{false};
         for (;;)
@@ -733,7 +620,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         }
     }
 
-    /// Non-blocking read.  Returns Ok / Empty / Closed / Aborted.
     [[nodiscard]] PopStatus try_pop_status(Frame& out) noexcept
     {
         if (header_ == nullptr)
@@ -758,9 +644,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return PopStatus::Empty;
         }
-        // Closing or Closed.  Re-confirm we have actually drained up to
-        // closing_at; if the consumer reached the snapshot the stream is
-        // terminally closed and we promote Closing -> Closed for clarity.
+        // assert: reaching closing_at on an empty ring is terminal, so Closing is promoted.
         const auto closing_seq{header_->closing_at.value.load(std::memory_order_acquire)};
         if (read >= closing_seq)
         {
@@ -770,17 +654,12 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                 std::memory_order_acquire);
             return PopStatus::Closed;
         }
-        // Producer raced us -- closing_at not reached yet but we just
-        // saw the ring empty.  The next call will see the freshly-written
-        // frame or the closing condition.
+        // assert: the ring read empty before closing_at — the producer raced us; the next call
+        // sees the frame or the closing condition.
         return PopStatus::Empty;
     }
 
-    // -- Bool-returning shims for backwards compatibility -------------
-
-    /// Returns true iff the push wrote a frame.  Closure or abort look
-    /// the same as "full" to legacy callers -- they must use
-    /// `try_push_status` if they need to disambiguate.
+    // post: false conflates Full, Closed and Aborted; try_push_status() tells them apart.
     [[nodiscard]] bool try_push(const Frame& frame) noexcept
     {
         return try_push_status(frame) == PushStatus::Ok;
@@ -879,14 +758,14 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     {
         const auto index{sequence % header_->slot_count};
         auto* base{static_cast<std::byte*>(mapping_)};
-        return base + data_offset() + (index * sizeof(Frame)); // NOLINT
+        return base + data_offset() + (index * sizeof(Frame));
     }
 
     [[nodiscard]] const void* slot_ptr(std::uint64_t sequence) const noexcept
     {
         const auto index{sequence % header_->slot_count};
         const auto* base{static_cast<const std::byte*>(mapping_)};
-        return base + data_offset() + (index * sizeof(Frame)); // NOLINT
+        return base + data_offset() + (index * sizeof(Frame));
     }
 
     [[nodiscard]] bool try_push_impl(const Frame& frame, bool count_drop) noexcept
@@ -906,8 +785,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return true;
     }
 
-    /// Fast-path notify: bump wake_epoch only if someone is parked.
-    /// Cost in the no-contention case: one relaxed load + branch.
+    // post: bumps wake_epoch only when parker_count is non-zero — one acquire load and a branch
+    // when nobody is parked.
     void notify_progress() noexcept
     {
         if (header_->parker_count.load(std::memory_order_acquire) == 0U)
@@ -918,14 +797,15 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         header_->wake_epoch.notify_all();
     }
 
-    /// Rare-path notify: bump wake_epoch unconditionally so any parked
-    /// thread observes the state change on its next iteration.
+    // post: bumps wake_epoch unconditionally, so a parked thread sees the state change on its next
+    // iteration.
     void notify_state_change() noexcept
     {
         header_->wake_epoch.fetch_add(1, std::memory_order_acq_rel);
         header_->wake_epoch.notify_all();
     }
 
+    // note: `other` is emptied member by member with std::exchange, never moved whole.
     // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
     void move_from(SharedMemorySpscChannel&& other) noexcept
     {
