@@ -247,16 +247,19 @@ owes a repair (Q23, below).
    not diverge silently — `check_causal_monotonicity` sees the inversion and terminates — but a
    deterministic-replay product turning a reachable ordering hole into an abort is a design call,
    not an implementation detail. **Daidalos**.
+   DISCHARGED 2026-09-09 `coderoast-ipc 981e17c` — the watermark is the whole CausalKey and the gate compares keys (key_less); FrontierGatesOnSameTickLowerAgentOrder pins the hold. Ruled by Daidalos: a reachable ordering hole is closed at the gate, never converted into an abort.
 5. **`validate_header` cannot see a same-size field reshuffle** (Q4). It compares magic, ABI
    version, `slot_size` and `slot_count`; a header whose fields are reordered without changing
    `sizeof` passes, and only the ABI-version discipline covers it. That discipline is `ADR-11.D1`'s
    and is stated nowhere in this repo. **Daidalos** for the statement, **Argos** for whether the
    release gate should assert it.
+   DISCHARGED 2026-09-09 `coderoast-ipc 981e17c` — the discipline is stated at the header (`abi_version`'s invariant: the version moves on ANY layout change, a same-size reshuffle included) and `ADR-11.D1` keeps the rule; the release gate is not asked to assert a shape it cannot see.
 6. **`bench_ipc.cpp`'s hand-written `main` is `BENCHMARK_MAIN()` minus a fallback** (Q23). At the
    pinned `benchmark/1.9.5` the macro already calls `MaybeReenterWithoutASLR` first; the local
    `main` reproduces its body but drops the `argv == nullptr` guard. And `core/CMakeLists.txt`'s
    bench note still asserts *"The TU carries `BENCHMARK_MAIN()`"*, which is not true today.
    **Hephaïstos**, for both halves in one pass.
+   DISCHARGED 2026-09-09 `coderoast-ipc 981e17c` — ripped, with its README line; the wire ABI is kSharedChannelAbiVersion alone.
 
 ### Witnesses
 
