@@ -4,11 +4,11 @@ import std;
 export namespace coderoast::ipc
 {
 
-inline constexpr std::uint32_t kIpcAbiVersion{3U};
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
 // invariant: both ends derive a shard's segment name from (base, shard_id) here; a second
 // definition would silently open two different segments.
+// post: `<base>_shard_<shard_id>`, the one segment name both processes agree on.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
@@ -23,7 +23,7 @@ enum class LineFrameFlags : std::uint16_t
 {
     kLineFrameFlagNone = 0,
     kLineFrameFlagTruncated = 1U << 0U,
-    kLineFrameFlagEndOfStream = 1U << 1U,
+    // note: bit 1 was an EndOfStream flag nobody set; end of stream is the channel state.
     kLineFrameFlagWindowSeal = 1U << 2U,
 };
 
@@ -41,8 +41,7 @@ enum class LineFrameFlags : std::uint16_t
 
 [[nodiscard]] constexpr bool is_control_frame(LineFrameFlags flags) noexcept
 {
-    return has_flag(flags, LineFrameFlags::kLineFrameFlagWindowSeal) ||
-           has_flag(flags, LineFrameFlags::kLineFrameFlagEndOfStream);
+    return has_flag(flags, LineFrameFlags::kLineFrameFlagWindowSeal);
 }
 
 // refs: ADR-22.D1, ADR-22.D4
@@ -153,6 +152,8 @@ struct ChannelConfig
     std::size_t slot_count{kDefaultSharedChannelSlotCount};
     BackpressurePolicy backpressure{BackpressurePolicy::Block};
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
+    // invariant: create() unlinks a stale segment of the same name first, and nothing unlinks on
+    // destroy unless asked, so a consumer can still open what a finished producer left behind.
     bool unlink_before_create{true};
     bool unlink_on_destroy{false};
     // refs: ADR-22.D4
@@ -235,6 +236,8 @@ struct alignas(kCacheLineBytes) Cursor
 struct SharedChannelHeader
 {
     std::uint64_t magic{kSharedChannelMagic};
+    // invariant: kSharedChannelAbiVersion moves on ANY layout change of this header or the frame,
+    // a same-size field reshuffle included — validate_header compares sizes, never shapes.
     std::uint32_t abi_version{kSharedChannelAbiVersion};
     std::uint32_t header_size{sizeof(SharedChannelHeader)};
 
@@ -391,6 +394,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         close();
     }
 
+    // post: throws std::invalid_argument on a zero slot_count or an intent_channel at or past
+    // kIntentChannelNameCapacity, before any segment exists; a stale segment is unlinked first.
     [[nodiscard]] static SharedMemorySpscChannel create(const ChannelConfig& config)
     {
         if (config.slot_count == 0U)
@@ -437,6 +442,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return channel;
     }
 
+    // post: throws std::runtime_error when the mapped header's magic, ABI version, slot size or
+    // slot count disagrees with this build's: both ends instantiate one Frame, or neither opens.
     [[nodiscard]] static SharedMemorySpscChannel
     open(std::string_view name, BackpressurePolicy backpressure = BackpressurePolicy::Block,
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)

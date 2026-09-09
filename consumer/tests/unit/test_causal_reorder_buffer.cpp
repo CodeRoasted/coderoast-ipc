@@ -30,6 +30,42 @@ TEST(CausalReorderBuffer, FrontierGatesOnceAllShardsProduced)
     EXPECT_EQ(payload_of(out), "s0-b");
 }
 
+// assert: a shard whose last frame shares the candidate's TICK can still deliver a lower
+// agent_order at that tick, so the frontier gates on the whole causal key, never on the tick.
+// note: a tick-grain watermark emitted s0-a before s1-b and the monotonicity check aborted.
+TEST(CausalReorderBuffer, FrontierGatesOnSameTickLowerAgentOrder)
+{
+    ProducerHarness producers{"same_tick_overtake", 2};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
+    Buffer buffer{drainer};
+
+    (void)producers.producers[1].push(
+        make_frame(1, 1, "s1-a", /*logical_tick=*/5, /*agent_order=*/2));
+    (void)producers.producers[0].push(
+        make_frame(2, 0, "s0-a", /*logical_tick=*/5, /*agent_order=*/7));
+
+    Frame out{};
+    ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s1-a");
+
+    // assert: shard 1's watermark is (5, 2) < (5, 7), so s0-a must wait for shard 1 to settle.
+    EXPECT_FALSE(buffer.try_select(out)) << "the frontier released s0-a while shard 1 could still "
+                                            "deliver a lower agent_order at tick 5";
+
+    (void)producers.producers[1].push(
+        make_frame(3, 1, "s1-b", /*logical_tick=*/5, /*agent_order=*/3));
+    ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s1-b");
+    EXPECT_FALSE(buffer.try_select(out)) << "(5, 3) is still below (5, 7); shard 1 has not settled";
+
+    (void)producers.producers[1].push(
+        make_frame(4, 1, "s1-c", /*logical_tick=*/6, /*agent_order=*/0));
+    ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s0-a") << "shard 1 holds a later candidate, so (5, 7) is released";
+    ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s1-c");
+}
+
 TEST(CausalReorderBuffer, FrontierGatesOnIdleShardThatNeverProducedData)
 {
     // assert: a shard that has produced nothing at all must still gate the frontier — an agent

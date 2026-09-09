@@ -92,13 +92,10 @@ template <coderoast::ipc::FrameLike Frame>
 }
 
 // refs: ADR-11.D3
-// post: a strict TOTAL order — no two distinct frames compare equivalent, so the merge leaves no
-// residual tie.
-template <coderoast::ipc::FrameLike Frame>
-[[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
+// post: a strict TOTAL order over keys — no two distinct keys compare equivalent — and the one
+// comparator every frontier and heap decision goes through.
+[[nodiscard]] inline bool key_less(const CausalKey& lhs_key, const CausalKey& rhs_key) noexcept
 {
-    const auto lhs_key{extract_causal_key(lhs)};
-    const auto rhs_key{extract_causal_key(rhs)};
     if (lhs_key.logical_tick != rhs_key.logical_tick)
     {
         return lhs_key.logical_tick < rhs_key.logical_tick;
@@ -112,6 +109,15 @@ template <coderoast::ipc::FrameLike Frame>
         return lhs_key.intra_agent_index < rhs_key.intra_agent_index;
     }
     return lhs_key.shard_id < rhs_key.shard_id;
+}
+
+// refs: ADR-11.D3
+// post: a strict TOTAL order — no two distinct frames compare equivalent, so the merge leaves no
+// residual tie.
+template <coderoast::ipc::FrameLike Frame>
+[[nodiscard]] inline bool causal_less(const Frame& lhs, const Frame& rhs) noexcept
+{
+    return key_less(extract_causal_key(lhs), extract_causal_key(rhs));
 }
 
 // post: unlinks every shard on construction and again on destruction, so a crashed run's frames
@@ -334,6 +340,7 @@ template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class CausalReorderBuffer
 {
   public:
+    // pre: the drainer outlives this buffer, which keeps a non-owning pointer to it.
     explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer)
         : drainer_{&drainer}, shards_(drainer.shard_count())
     {
@@ -346,7 +353,7 @@ class CausalReorderBuffer
     ~CausalReorderBuffer() = default;
 
     // post: moves every frame the shards' rings currently hold into the per-shard heaps and raises
-    // each shard's watermark to the highest tick it has produced.
+    // each shard's watermark to the highest causal KEY it has produced.
     void refill()
     {
         refills_.fetch_add(1U, std::memory_order_relaxed);
@@ -355,10 +362,10 @@ class CausalReorderBuffer
         {
             while (drainer_->try_pull(shard_id, frame))
             {
-                const auto tick{extract_causal_key(frame).logical_tick};
-                if (tick > shards_[shard_id].watermark_tick)
+                const auto key{extract_causal_key(frame)};
+                if (key_less(shards_[shard_id].watermark, key))
                 {
-                    shards_[shard_id].watermark_tick = tick;
+                    shards_[shard_id].watermark = key;
                 }
                 shards_[shard_id].buffer.push(std::move(frame));
             }
@@ -366,7 +373,9 @@ class CausalReorderBuffer
     }
 
     // invariant: the frontier gate — the earliest buffered candidate is emitted only once no
-    // non-EOS shard has an empty heap and a watermark below that candidate's tick.
+    // non-EOS shard has an empty heap and a watermark KEY below that candidate's key.
+    // invariant: the watermark is the whole key, never its tick alone: a shard whose last frame
+    // shares the candidate's tick can still deliver a lower agent_order at that tick.
     // post: false when the frontier blocks or no shard holds a candidate.
     [[nodiscard]] bool try_select(Frame& out)
     {
@@ -396,14 +405,14 @@ class CausalReorderBuffer
             return false;
         }
 
-        // assert: a shard settles by being EOS, by holding a candidate, or by a watermark that
-        // reached best's tick — a WindowSeal promises nothing earlier remains on that shard.
+        // assert: a shard settles by being EOS, by holding a candidate, or by a watermark key that
+        // reached best's key — a WindowSeal promises nothing earlier remains on that shard.
         // note: this is what drains the final same-tick seal batch at a PlayToTarget freeze.
-        const auto best_tick{extract_causal_key(shards_[best].buffer.top()).logical_tick};
+        const auto best_key{extract_causal_key(shards_[best].buffer.top())};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
             if (!drainer_->shard_eos(shard_id) && shards_[shard_id].buffer.empty() &&
-                shards_[shard_id].watermark_tick < best_tick)
+                key_less(shards_[shard_id].watermark, best_key))
             {
                 frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
                 notify(ConsumerEvent::kFrontierBlock, shard_id);
@@ -484,6 +493,8 @@ class CausalReorderBuffer
     // refs: ADR-11.D3
     // invariant: the emitted keys are strictly increasing; a tie means the key's uniqueness premise
     // broke upstream, an inversion means the frontier released a frame too early.
+    // post: prints both keys to stderr and calls std::abort on a tie or an inversion — a
+    // deterministic-replay product never degrades silently.
     // note: one comparison per frame against an O(shards) select — determinism outranks it.
     void check_causal_monotonicity(const Frame& frame)
     {
@@ -526,9 +537,10 @@ class CausalReorderBuffer
     struct ShardState
     {
         std::priority_queue<Frame, std::vector<Frame>, Greater> buffer{};
-        // invariant: per-shard frames are causally non-decreasing, so the highest tick pulled
+        // invariant: per-shard frames are causally non-decreasing, so the highest key pulled
         // bounds the earliest frame that shard can still deliver.
-        std::uint64_t watermark_tick{0};
+        // note: a tick-grain bound admitted a same-tick lower-agent_order overtake (2026-09-08).
+        CausalKey watermark{};
     };
 
     static constexpr std::size_t kNoIndex{std::numeric_limits<std::size_t>::max()};

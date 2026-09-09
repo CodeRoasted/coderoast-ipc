@@ -397,7 +397,6 @@ boundary, and implicit padding would put indeterminate bytes on the wire. A `sta
 build.
 
 ABI version constants ensure compatibility:
-- `kIpcAbiVersion = 3`
 - `kSharedChannelAbiVersion = 5`
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
