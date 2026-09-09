@@ -408,11 +408,20 @@ class CausalReorderBuffer
         // assert: a shard settles by being EOS, by holding a candidate, or by a watermark key that
         // reached best's key — a WindowSeal promises nothing earlier remains on that shard.
         // note: this is what drains the final same-tick seal batch at a PlayToTarget freeze.
-        const auto best_key{extract_causal_key(shards_[best].buffer.top())};
+        // invariant: the comparison drops shard_id — a shard can only deliver a STRICTLY greater
+        // (tick, agent_order, index) than its watermark, so the same-tick seal batch drains.
+        const auto positional{[](const CausalKey& key) noexcept
+                              {
+                                  return CausalKey{.logical_tick = key.logical_tick,
+                                                   .agent_order = key.agent_order,
+                                                   .intra_agent_index = key.intra_agent_index,
+                                                   .shard_id = 0U};
+                              }};
+        const auto best_key{positional(extract_causal_key(shards_[best].buffer.top()))};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
             if (!drainer_->shard_eos(shard_id) && shards_[shard_id].buffer.empty() &&
-                key_less(shards_[shard_id].watermark, best_key))
+                key_less(positional(shards_[shard_id].watermark), best_key))
             {
                 frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
                 notify(ConsumerEvent::kFrontierBlock, shard_id);

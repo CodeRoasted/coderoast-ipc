@@ -62,6 +62,11 @@ TEST(CausalReorderBuffer, FrontierGatesOnSameTickLowerAgentOrder)
         make_frame(4, 1, "s1-c", /*logical_tick=*/6, /*agent_order=*/0));
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "s0-a") << "shard 1 holds a later candidate, so (5, 7) is released";
+    // assert: shard 0's watermark is (5, 7) < (6, 0), so s1-c waits for shard 0 to settle — here by
+    // EOS.
+    EXPECT_FALSE(buffer.try_select(out))
+        << "the frontier released s1-c while shard 0 was unsettled";
+    producers.producers[0].close_graceful();
     ASSERT_TRUE(buffer.try_select(out));
     EXPECT_EQ(payload_of(out), "s1-c");
 }
