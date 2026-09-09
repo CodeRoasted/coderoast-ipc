@@ -20,9 +20,9 @@ option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${PR
 ###########################################################
 #  Module-bearing library (1.5.1 unwrap — header-only code now lives in the module interface;
 #  the §8.1 wrapper + textual api/ headers are RETIRED). One target carries the file set.
-#  1.5.2 §11.9.11 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail layers) —
+#  ADR-3.D4 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail layers) —
 #  one cohesive SHM-channel concern, all-public surface, the only non-interface code being the
-#  §11.9.9 textual POSIX impl unit. Nothing is sealed, so the unit tests stay CONSUMERS (they
+#  textual POSIX impl unit (ADR-3.D4 rule 2). Nothing is sealed, so the unit tests stay CONSUMERS (they
 #  double as the module-import proof — the reason the standalone proof target was retired).
 ###########################################################
 add_library(coderoast_ipc_core STATIC)
@@ -32,7 +32,7 @@ target_sources(coderoast_ipc_core
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
         FILES    ${CMAKE_CURRENT_SOURCE_DIR}/api/core.cppm
 )
-# §11.9 cascade rule: the POSIX shm syscalls + their C macros (errno, O_*, PROT_*, MAP_*) cannot live in
+# ADR-3.D4 rule 2, the cascade: the POSIX shm syscalls + their C macros (errno, O_*, PROT_*, MAP_*) cannot live in
 # the import-std interface — they live in this TEXTUAL implementation unit (own GMF, no import std). It is
 # an ordinary source attached to the module (`module coderoast.ipc.core;`), NOT a file-set interface.
 target_sources(coderoast_ipc_core
@@ -90,7 +90,7 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
         find_package(GTest REQUIRED CONFIG)
         enable_testing()
 
-        # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+        # CONSUMER test target (links the lib — doubles as the import proof; ADR-3.D4
         # members are pointless here: nothing is sealed). Test TUs import the
         # coderoast.ipc.core.test aggregate, compiled in-target. Test TUs carry their
         # own main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
@@ -126,7 +126,7 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
         find_package(benchmark REQUIRED CONFIG)
 
         # CONSUMER bench target; no coderoast.ipc.core.bench aggregate manufactured —
-        # a single bench TU with a single import (§11.9.11 sizing rule). The TU
+        # a single bench TU with a single import (ADR-3.D4's partitions-iff-measured rule). The TU
         # carries BENCHMARK_MAIN() → link benchmark::benchmark, not benchmark_main.
         add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
         target_link_libraries(coderoast_ipc_core_bench PRIVATE

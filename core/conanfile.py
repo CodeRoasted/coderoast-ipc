@@ -12,7 +12,7 @@ class CodeRoastIpcCoreConan(ConanFile):
     # 1.5.1 unwrap: PURE named module (coderoast.ipc.core) — the former header-only
     # api/ surface now lives in the module interface; the textual api/ headers are gone.
     # One .cppm interface (api/) + one textual impl unit (src/core_impl.cpp — the
-    # errno/POSIX syscalls, §11.9) → static-library. No header surface ships.
+    # errno/POSIX syscalls, ADR-3.D4 rule 2) → static-library. No header surface ships.
     package_type = "static-library"
     license = "Apache-2.0"
     description = "Core transport primitives for coderoast-ipc (SPSC channel, frame types)."

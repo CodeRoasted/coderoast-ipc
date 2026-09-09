@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-# 1.5.1 unwrap (Argos to own topology): the pure module imports std → gate UUID before project().
+# modules unwrap (Argos to own topology): the pure module imports std → gate UUID before project().
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 
 project(coderoast_ipc_producer LANGUAGES CXX)
@@ -15,9 +15,9 @@ option(CODEROAST_IPC_PRODUCER_BUILD_TESTS "Build coderoast_ipc_producer unit tes
 find_package(coderoast_ipc_core REQUIRED CONFIG)
 
 ###########################################################
-#  Module-bearing library (1.5.1 unwrap — header-only code now in the module interface; wrapper +
+#  Module-bearing library (modules unwrap — header-only code now in the module interface; wrapper +
 #  textual api/ headers retired). The module `import coderoast.ipc.core`, so link core.
-#  1.5.2 §11.9.11 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail
+#  ADR-3.D4 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail
 #  layers) — one cohesive frame-building concern, all-public surface, nothing sealed.
 ###########################################################
 add_library(coderoast_ipc_producer STATIC)
@@ -71,7 +71,7 @@ if(CODEROAST_IPC_PRODUCER_BUILD_TESTS)
         find_package(GTest REQUIRED CONFIG)
         enable_testing()
 
-        # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+        # CONSUMER test target (links the lib — doubles as the import proof; ADR-3.D4
         # members are pointless here: nothing is sealed). Test TUs import the
         # coderoast.ipc.producer.test aggregate, compiled in-target. Test TUs carry their
         # own main() (InitGoogleTest) → link GTest::gtest, not gtest_main.

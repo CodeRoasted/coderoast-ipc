@@ -17,7 +17,7 @@ find_package(coderoast_ipc_core REQUIRED CONFIG)
 ###########################################################
 #  Module-bearing library (1.5.1 unwrap — the 10 header-only consumer headers now live in the module
 #  interface, topo-ordered; wrapper + textual api/ retired). The module `import coderoast.ipc.core`.
-#  1.5.2 §11.9.11 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail
+#  ADR-3.D4 sizing ruling: DELIBERATELY a SINGLE module (no internal/api/detail
 #  layers) — one cohesive causal SHM consumption concern, all-public surface, nothing sealed.
 ###########################################################
 add_library(coderoast_ipc_consumer STATIC)
@@ -70,7 +70,7 @@ if(CODEROAST_IPC_CONSUMER_BUILD_TESTS)
         find_package(GTest REQUIRED CONFIG)
         enable_testing()
 
-        # CONSUMER test target (links the lib — doubles as the import proof; §11.9.7
+        # CONSUMER test target (links the lib — doubles as the import proof; ADR-3.D4
         # members are pointless here: nothing is sealed). Test TUs import the
         # coderoast.ipc.consumer.test aggregate, compiled in-target. test_main.cpp carries
         # the single main() (InitGoogleTest) → link GTest::gtest, not gtest_main.
