@@ -405,6 +405,7 @@ by a slot a `refs:` names.
     `insight-eidos` (4), `coderoast-security` (5), plus `malf`, `coderoast-server` and two docs.
     They live in CMake and conanfile comments, outside every gate's population. **Daidalos** for the
     repoint, **Argos** if it wants an arm.
+    DISCHARGED 2026-09-09 — 68 codes over 25 files in eight repos plus the malf module-conformance action's description, all onto `ADR-3.D4` (with the migration plan's `1.5.x` step numbers dropped): `coderoast-ipc c9a9616` · `coderoast-server 02eb372` · `insight-eidos 734b561` · `insight-metalog 3f31b5c` · `insight-canon 8ba90a8` · `logcraft 5806e9e` · `coderoast-security da52316` · `malf 5560a5f`; a sweep over the workspace finds 0 left outside the conan cache. No arm minted: the population is gone.
 
 ### Witnesses
 
