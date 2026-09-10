@@ -229,6 +229,7 @@ owes a repair (Q23, below).
    is `kSharedChannelAbiVersion`; nothing in the ADRs, the studies, the registers or the memory
    store claims a second token. Removing it is a public-API change with a README cascade —
    **Hephaïstos**, with **Eqya** on whether the README's ABI section should describe one version.
+   DISCHARGED 2026-09-10 `coderoast-ipc a5b1743` (the rip itself landed at `981e17c`; its disposition line was written under finding 6 by mistake and is corrected there) — `kIpcAbiVersion` is gone with its README line; a workspace sweep over every repo finds the token only in this ledger. The wire ABI is `kSharedChannelAbiVersion` alone, and the README's ABI section lists that one version.
 2. **The per-shard heaps have no bound once the frontier blocks** (Q30). The `invariant:` says
    capping them would drop frames silently, which is right; but `refill` drains a whole ring into a
    heap, so the ring only fills — and backpressure only bites — when the caller stops calling
@@ -241,6 +242,7 @@ owes a repair (Q23, below).
    sealing, or a `shard_count_` larger than the number of shards actually sealing, leaves an entry
    that is never removed and the map grows for the life of the object. No test covers it —
    **Hephaïstos** for the reclamation, **Kleio** for the case.
+   DISCHARGED 2026-09-10 `coderoast-ipc a5b1743` — two reclamations, both on `ADR-11.D3`'s checked invariant (the merge emits strictly increasing keys and aborts otherwise, and one window's seals all carry one tick): `reclaim_windows_below` erases every partial entry at a tick below an arriving seal's, and `abandon_partial_windows` clears the remainder once `all_shards_done()`. Neither is silent — `windows_abandoned()` counts them, `partial_windows()` exposes the live size. `PartialWindowsAreReclaimedWhenAShardNeverSeals` pins abandoned == 5, closed == 0, the map empty at the end and never above 1 during the run.
 4. **The frontier's release test admits a same-tick overtake** (Q41). A shard blocks only when its
    `watermark_tick < best_tick`; a shard whose watermark **equals** the candidate's tick does not
    block, yet it could still deliver a frame at that same tick with a lower `agent_order`. It does
@@ -259,7 +261,8 @@ owes a repair (Q23, below).
    `main` reproduces its body but drops the `argv == nullptr` guard. And `core/CMakeLists.txt`'s
    bench note still asserts *"The TU carries `BENCHMARK_MAIN()`"*, which is not true today.
    **Hephaïstos**, for both halves in one pass.
-   DISCHARGED 2026-09-09 `coderoast-ipc 981e17c` — ripped, with its README line; the wire ABI is kSharedChannelAbiVersion alone.
+   CORRECTION 2026-09-10 — the line that stood here (*"ripped, with its README line; the wire ABI is kSharedChannelAbiVersion alone"*) is finding **1**'s disposition, written under the wrong finding on 2026-09-09; it has been moved there. Finding 6 was NOT discharged that day: `bench_ipc.cpp` still carried the hand-written `main` and `core/CMakeLists.txt` still asserted the macro.
+   DISCHARGED 2026-09-10 `coderoast-ipc a5b1743` — `BENCHMARK_MAIN();` replaces the hand-written `main`. Verified at the pinned header (`benchmark/benchmark.h:1743-1758`): the macro calls `MaybeReenterWithoutASLR` first AND carries the `argv == nullptr` guard the local copy dropped. `core/CMakeLists.txt`'s note is true again with no edit.
 
 ### Witnesses
 
@@ -391,14 +394,17 @@ by a slot a `refs:` names.
    a bare convention and the rest of the workspace — insight-canon, logcraft, insight-eidos,
    coderoast-server — links `GTest::gtest_main` freely. Either the reason exists and is unwritten,
    or the convention is arbitrary. **Kleio**.
+   REFUSED 2026-09-10 already clean at HEAD: the reason exists, is written, and is TRUE. All three `CMakeLists.txt` state it — *"own main() (InitGoogleTest) → link GTest::gtest, not gtest_main"* (`core/CMakeLists.txt:96`, `producer/CMakeLists.txt:77`, `consumer/CMakeLists.txt:76`) — and each test tier does define its own `main`: `core/tests/unit/test_shared_memory_channel.cpp:127`, `producer/tests/unit/test_frame_builder.cpp:59`, `consumer/tests/unit/test_main.cpp:5`. Linking `gtest_main` beside an own `main` is a duplicate-symbol error, so the convention is forced, not arbitrary.
 9. **`kLineFrameFlagEndOfStream` is set by nobody** (Q16). A workspace-wide sweep finds two sites,
    both in `core.cppm`: the enumerator and `is_control_frame`'s read of it. End of stream became a
    channel state, and this flag is what the in-band sentinel left behind. *Justification search:*
    `ADR-11.D2` still lists *"the `WindowSeal`/`EndOfStream` markers"* among what the transport owns,
    so deleting the flag would contradict the ADR as written — this is a question about `ADR-11.D2`'s
    text before it is a question about the code. **Daidalos**, then **Hephaïstos**.
+   DISCHARGED 2026-09-10 `coderoast-ipc a5b1743` — Daidalos ruled first: `ADR-11.D2` now reads *"End of stream is the channel's STATE — Closing, Closed or Aborted, read by the consumer off the shared header — never an in-band frame: the flag that once reserved a bit for one was set by nobody and was ripped on 2026-09-09."* The enumerator is gone from `core/api/core.cppm` (a `note:` records the freed bit), and this commit lands the doc cascade the rip left behind: `README.md` no longer lists the flag in the frame layout, no longer quotes the ADR's old *"seal and end-of-stream markers"* enumeration, and no longer calls EndOfStream a completion barrier.
 10. **`test_channel_shutdown.cpp` was numbered 1–8 with no 7.** The numbering is gone with the
     rulers; whether the deleted case is still covered is **Kleio**'s to say.
+    REFUSED 2026-09-10 already clean at HEAD: the missing case is not uncovered, its SUBJECT was removed. `git show fcf1834:core/tests/unit/test_channel_shutdown.cpp` carries 8 `TEST`s including `ChannelShutdown.OverwriteOldestRespectsClose`; `1ec47ce` (*"feat(core)!: remove OverwriteOldest — unsound on an SPSC ring by construction"*) deleted the policy and that one test, leaving 7. `ADR-11.D4` states the rule: *"OverwriteOldest does not exist."* Nothing is owed.
 11. **The `§11.x` section codes are stale across the workspace, not just here** (Q1). The attic
     records that 262 such references were repointed to `ADR-3.D4`; a sweep finds at least 24 left,
     over ten files in eight repos — `coderoast-ipc` (10), `insight-canon` (7), `logcraft` (4),
