@@ -5,6 +5,10 @@ set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 
 project(coderoast_ipc_consumer LANGUAGES CXX)
 
+# Warnings on for every first-party translation unit (Founder, 2026-09-10) — reported, not promoted.
+add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra>"
+                    "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>")
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
