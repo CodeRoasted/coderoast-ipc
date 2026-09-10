@@ -808,8 +808,8 @@ class WindowClosedConsumer
 
     // post: at most one event per call; several completing seals in one call still yield one
     // WindowClosed, and the next comes on the next call.
-    // invariant: a window's entry is erased when its Nth seal lands, so the map holds only
-    // partially sealed windows.
+    // invariant: a window's entry is erased when its Nth seal lands, when a seal at a higher tick
+    // proves it can never complete, or when every shard has ended — the map never outlives a run.
     [[nodiscard]] NextKind try_next(Frame& out_frame, WindowClosed& out_window)
     {
         Frame scratch{};
@@ -817,6 +817,10 @@ class WindowClosedConsumer
         {
             if (!underlying_.try_next(scratch))
             {
+                if (underlying_.all_shards_done())
+                {
+                    abandon_partial_windows();
+                }
                 return NextKind::kNone;
             }
             const bool is_seal{coderoast::ipc::has_flag(
@@ -829,12 +833,14 @@ class WindowClosedConsumer
             }
             const auto window_id{scratch.header.window_id};
             const auto logical_tick{scratch.header.logical_tick};
-            auto [it, inserted] = seal_counts_.try_emplace(window_id, std::size_t{0});
-            ++(it->second);
+            auto [entry, inserted] =
+                seal_counts_.try_emplace(window_id, PartialWindow{.logical_tick = logical_tick});
+            ++(entry->second.seals);
             ++seals_observed_;
-            if (it->second >= shard_count_)
+            reclaim_windows_below(logical_tick);
+            if (entry->second.seals >= shard_count_)
             {
-                seal_counts_.erase(it);
+                seal_counts_.erase(entry);
                 ++windows_closed_;
                 out_window = WindowClosed{.window_id = window_id, .logical_tick = logical_tick};
                 return NextKind::kWindowClosed;
@@ -867,6 +873,18 @@ class WindowClosedConsumer
         return seals_observed_;
     }
 
+    // post: the count of windows reclaimed WITHOUT closing — declared, never absorbed.
+    [[nodiscard]] std::uint64_t windows_abandoned() const noexcept
+    {
+        return windows_abandoned_;
+    }
+
+    // post: the windows currently held partially sealed — the whole of this adapter's state growth.
+    [[nodiscard]] std::size_t partial_windows() const noexcept
+    {
+        return seal_counts_.size();
+    }
+
     [[nodiscard]] Underlying& underlying() noexcept
     {
         return underlying_;
@@ -878,12 +896,48 @@ class WindowClosedConsumer
     }
 
   private:
+    // invariant: every seal of one window carries ONE logical tick, so this is the single tick at
+    // which the window can still be completed.
+    // refs: ADR-11.D3
+    struct PartialWindow
+    {
+        std::size_t seals{0};
+        std::uint64_t logical_tick{0};
+    };
+
+    // invariant: the causal merge emits strictly increasing keys and aborts otherwise, so a seal at
+    // `logical_tick` proves no shard can still deliver a seal below it.
+    // refs: ADR-11.D3
+    void reclaim_windows_below(std::uint64_t logical_tick) noexcept
+    {
+        for (auto cursor{seal_counts_.begin()}; cursor != seal_counts_.end();)
+        {
+            if (cursor->second.logical_tick < logical_tick)
+            {
+                cursor = seal_counts_.erase(cursor);
+                ++windows_abandoned_;
+            }
+            else
+            {
+                ++cursor;
+            }
+        }
+    }
+
+    // post: the map is empty — every shard has ended, so a window still partial can never close.
+    void abandon_partial_windows() noexcept
+    {
+        windows_abandoned_ += seal_counts_.size();
+        seal_counts_.clear();
+    }
+
     std::size_t shard_count_{1};
     Underlying underlying_;
-    std::unordered_map<std::uint64_t, std::size_t> seal_counts_;
+    std::unordered_map<std::uint64_t, PartialWindow> seal_counts_;
     std::uint64_t frames_emitted_{0};
     std::uint64_t windows_closed_{0};
     std::uint64_t seals_observed_{0};
+    std::uint64_t windows_abandoned_{0};
 };
 
 } // namespace coderoast::ipc::consumer

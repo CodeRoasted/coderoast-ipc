@@ -49,16 +49,4 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
 BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
 } // namespace
 
-// note: the re-exec drops ASLR first — layout randomization is run-to-run timing noise.
-int main(int argc, char** argv)
-{
-    benchmark::MaybeReenterWithoutASLR(argc, argv);
-    benchmark::Initialize(&argc, argv);
-    if (benchmark::ReportUnrecognizedArguments(argc, argv))
-    {
-        return 1;
-    }
-    benchmark::RunSpecifiedBenchmarks();
-    benchmark::Shutdown();
-    return 0;
-}
+BENCHMARK_MAIN();

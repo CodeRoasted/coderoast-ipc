@@ -187,3 +187,60 @@ TEST(WindowClosedConsumer, DataFrameBeforeWindowClosedRespectsCausalOrder)
     EXPECT_EQ(pre_seal_data, kShardCount);
     EXPECT_EQ(post_seal_data, kShardCount);
 }
+
+// refs: ADR-11.D3
+TEST(WindowClosedConsumer, PartialWindowsAreReclaimedWhenAShardNeverSeals)
+{
+    constexpr std::size_t kShardCount{2};
+    constexpr std::uint64_t kWindowCount{5};
+    constexpr std::uint64_t kTickStride{100};
+
+    ProducerHarness producers{"reclaim", kShardCount};
+
+    for (std::uint64_t window{0}; window < kWindowCount; ++window)
+    {
+        const std::uint64_t tick{(window + 1U) * kTickStride};
+        (void)producers.producers[0].push(make_seal(window + 1U, 0, window, tick));
+    }
+    producers.producers[0].close_graceful();
+
+    (void)producers.producers[1].push(make_data(1, 1, 1, "lone"));
+    producers.producers[1].close_graceful();
+
+    WindowClosedConsumer consumer{WindowClosedConsumer::Config{
+        .underlying = {.channel = producers.base, .shard_count = kShardCount}}};
+
+    std::size_t largest_partial{0};
+    Frame frame{};
+    WindowClosedConsumer::WindowClosed window_closed{};
+    for (int spin{0}; spin < 5000; ++spin)
+    {
+        const auto kind{consumer.try_next(frame, window_closed)};
+        largest_partial = std::max(largest_partial, consumer.partial_windows());
+        if (kind != WindowClosedConsumer::NextKind::kNone)
+        {
+            continue;
+        }
+        if (consumer.all_shards_done())
+        {
+            break;
+        }
+    }
+
+    EXPECT_EQ(consumer.seals_observed(), kWindowCount)
+        << "every seal shard 0 pushed must reach the adapter; observed "
+        << consumer.seals_observed() << " of " << kWindowCount;
+    EXPECT_EQ(consumer.windows_closed(), 0U)
+        << "no window can close with one of " << kShardCount << " shards never sealing; closed "
+        << consumer.windows_closed();
+    EXPECT_EQ(consumer.windows_abandoned(), kWindowCount)
+        << "every partial window must be reclaimed and DECLARED, not absorbed; abandoned "
+        << consumer.windows_abandoned() << " of " << kWindowCount;
+    EXPECT_EQ(consumer.partial_windows(), 0U)
+        << "the map must be empty once every shard has ended; it holds "
+        << consumer.partial_windows();
+    EXPECT_LE(largest_partial, 1U)
+        << "a seal at a higher tick proves the lower window dead, so at most one entry is held; "
+           "the map peaked at "
+        << largest_partial;
+}

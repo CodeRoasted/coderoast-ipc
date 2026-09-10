@@ -371,7 +371,7 @@ struct LineFrameHeader {
     uint32_t agent_order;        // Stable scenario agent order
     uint32_t intra_agent_index;  // Per-agent generation counter
     uint32_t shard_id;           // Shard affinity
-    LineFrameFlags flags;        // Truncated, EndOfStream, WindowSeal
+    LineFrameFlags flags;        // Truncated, WindowSeal
     uint16_t reserved;           // Explicit tail padding (no implicit holes — see below)
 };
 
@@ -383,8 +383,8 @@ struct LineFrame {
 ```
 
 The header carries **no format tag**, by rule: `ADR-11.D2` enumerates what the transport owns —
-FIFO, sequence and gap counters, frame layout, backpressure policy, channel count, the seal and
-end-of-stream markers — and a format tag is not on that list. The format is intrinsic: the payload
+FIFO, sequence and gap counters, frame layout, backpressure policy, channel count, and the
+`WindowSeal` marker — and a format tag is not on that list. The format is intrinsic: the payload
 bytes carry it and the consumer recovers it from them, exactly as it must for a real log that
 arrives with no frame header.
 A `FrameFormat format` field did ride here until 1.8.1; it had three writers and zero readers, and was
@@ -406,7 +406,9 @@ otherwise unlikely case where two shards emit frames with identical
 `(logical_tick, agent_order, intra_agent_index)` — without it, the k-way merge
 would visit those frames in arrival order, which is non-deterministic.
 
-`WindowSeal` and `EndOfStream` are completion barriers. In deterministic
+`WindowSeal` is the completion barrier, and it is the only one on the wire: end
+of stream is the channel's STATE (Closing, Closed or Aborted), read by the
+consumer off the shared header, never an in-band frame. In deterministic
 LogCraft runs, seals are emitted at scheduler-defined window/epoch boundaries,
 not continuously per frame. A `WindowSeal(window_id, logical_tick=T)` means the
 emitting shard will not produce additional data frames with `logical_tick < T`.
