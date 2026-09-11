@@ -231,3 +231,68 @@ TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
         static_cast<std::size_t>(std::count(events.begin(), events.end(), drain_complete))};
     EXPECT_EQ(count, 1U) << "kDrainComplete must fire exactly once";
 }
+
+// refs: DN-98.D6
+// invariant: shard 0 emits only a seal per window and seals LAST; shard 1 emits kFramesPerWindow
+// data frames and its seal, so the frontier holds shard 1's frames until shard 0 seals.
+// assert: shard 1's heap then holds exactly one window's frames plus its seal at its fullest and
+// never more, because shard 0's seal releases everything below the boundary before the next window.
+TEST(CausalReorderBuffer, APerShardHeapNeverHoldsMoreThanOneSealIntervalsFrames)
+{
+    constexpr std::uint32_t kFramesPerWindow{5};
+    constexpr std::uint64_t kWindows{8};
+    constexpr std::uint64_t kWindowTicks{100};
+    constexpr std::size_t kBound{kFramesPerWindow + 1U};
+    constexpr std::uint32_t kLaggingShard{0};
+    constexpr std::uint32_t kBusyShard{1};
+    ProducerHarness producers{"heap_bound", 2};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
+    Buffer buffer{drainer};
+
+    std::uint64_t sequence{0};
+    std::uint64_t emitted{0};
+    Frame out{};
+    // post: the largest shard 1 heap seen before and during a drain to a blocked or empty select.
+    const auto drain_and_measure{
+        [&]
+        {
+            std::size_t largest{buffer.shard_summaries()[kBusyShard].buf_size};
+            while (buffer.try_select(out))
+            {
+                ++emitted;
+                largest = std::max(largest, buffer.shard_summaries()[kBusyShard].buf_size);
+            }
+            return std::max(largest, buffer.shard_summaries()[kBusyShard].buf_size);
+        }};
+
+    for (std::uint64_t window{0}; window < kWindows; ++window)
+    {
+        const std::uint64_t base{window * kWindowTicks};
+        const std::uint64_t boundary{base + kWindowTicks};
+        for (std::uint32_t index{0}; index < kFramesPerWindow; ++index)
+        {
+            (void)producers.producers[kBusyShard].push(
+                make_frame(++sequence, kBusyShard, "data", base + 1U + index, 1U, index));
+        }
+        (void)producers.producers[kBusyShard].push(make_frame(
+            ++sequence, kBusyShard, "", boundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+        const auto held_before_seal{drain_and_measure()};
+
+        (void)producers.producers[kLaggingShard].push(make_frame(
+            ++sequence, kLaggingShard, "", boundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+        const auto held_after_seal{drain_and_measure()};
+
+        EXPECT_EQ(held_before_seal, kBound)
+            << "window " << window << ": shard 1's heap held " << held_before_seal
+            << " frames while shard 0 had not sealed, expected " << kBound
+            << " (one window's data frames plus shard 1's seal)";
+        EXPECT_LE(held_after_seal, kBound)
+            << "window " << window << ": shard 1's heap grew to " << held_after_seal
+            << " frames, above the one-seal-interval bound " << kBound;
+        EXPECT_EQ(buffer.shard_summaries()[kBusyShard].buf_size, 0U)
+            << "window " << window << ": shard 0's seal did not release shard 1's frames";
+    }
+    EXPECT_EQ(emitted, kWindows * (kFramesPerWindow + 2U))
+        << "emitted " << emitted << " frames over " << kWindows << " windows, expected "
+        << (kWindows * (kFramesPerWindow + 2U)) << " (data frames plus both seals per window)";
+}

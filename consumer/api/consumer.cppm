@@ -332,10 +332,14 @@ class ShmTransportDrainer
     std::atomic<std::uint64_t> seals_observed_{0};
 };
 
-// refs: ADR-11.D4
+// refs: ADR-11.D3, ADR-11.D4, DN-98.D6
 // invariant: a per-shard CausalKey min-heap merged k-way; single owner thread, no mutex.
-// invariant: the per-shard heaps are unbounded by design — capping here would drop frames
-// silently, and the ring's slot_count bounds the ring, never these heaps.
+// invariant: a heap holds only frames some live shard's watermark has not passed, so it is bounded
+// by what its shard produced after the laggiest live shard's last seal: one seal interval.
+// invariant: the bound is the scenario's, not a constant: growth past it needs a live shard that
+// stops sealing without EOS, which already reads as frontier_blocks rising and buf_size growing.
+// invariant: no cap by design: a drop would be silent at the consumer, and leaving frames in the
+// ring deadlocks a producer blocked on that ring before it emits the seal the frontier awaits.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class CausalReorderBuffer
 {
