@@ -354,6 +354,29 @@ class AdaptiveWait
 export namespace coderoast::ipc
 {
 
+// refs: DN-99.D3
+// invariant: WaitStrategy::Adaptive's empty-poll progression for a caller that owns no channel: a
+// paused spin, then yields, then 1 us sleeps, the progression a blocked push waits on.
+// invariant: the header it hands AdaptiveWait is null, which Adaptive never reads, so this door
+// exposes no SharedChannelHeader.
+class AdaptivePoll
+{
+  public:
+    void wait() noexcept
+    {
+        wait_.wait(nullptr);
+    }
+
+    // post: the next wait() starts the progression over, from the paused spin.
+    void reset() noexcept
+    {
+        wait_.reset();
+    }
+
+  private:
+    AdaptiveWait wait_{WaitStrategy::Adaptive};
+};
+
 template <FrameLike Frame> class SharedMemorySpscChannel
 {
   public:
