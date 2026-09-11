@@ -237,6 +237,7 @@ owes a repair (Q23, below).
    heaps with nothing capping them anywhere. `ADR-26.D3` forbids unbounded allocation growth, so
    this is either a declared exception that needs stating or a defect — **Daidalos**, then
    **Hephaïstos**.
+   RULED 2026-09-11 `DN-98.D6` — a declared exception, not a defect, and not capped: each per-shard heap is bounded by the frames its shard produces after the laggiest live shard's last seal, which is one seal interval's volume because every live shard seals every window, data-less shards included; a cap would either drop frames silently or, by leaving frames in the ring, deadlock a producer blocked on that ring before it can emit the seal the frontier waits for; growth past the bound needs a producer that stops sealing without end of stream, and `frontier_blocks` already shows it. The site's `invariant:` states the bound and a witness test pins it. NOT discharged — the comment is Hephaïstos's and the test Kleio's.
 3. **`WindowClosedConsumer::seal_counts_` can leak an entry forever** (Q39). The entry is erased
    only when a window's N-th seal lands. A shard that reaches EOS or dies while the others keep
    sealing, or a `shard_count_` larger than the number of shards actually sealing, leaves an entry
