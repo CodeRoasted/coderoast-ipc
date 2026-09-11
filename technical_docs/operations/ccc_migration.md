@@ -390,7 +390,7 @@ by a slot a `refs:` names.
    removes `tests/` from the walk by policy. Whether that policy should hold now that a test's
    `/*name=*/` and `NOLINT` are load-bearing under CCC is **Argos**'s, with **Kleio** on the
    diagnostics themselves.
-   REFUSED 2026-09-11 not a defect, by law: `D-LSRC-1` (declared at `malf/malf`, the Founder 2026-08-31: *"excluding test files is wanted. tidy the test is unecessary and adds compute time for nothing"*) puts `tests/`, `benchmarks/`, `test_package/` and `technical_docs/` outside the clang-tidy surface unconditionally, and states it rests on no implementation fact. Argument comments and `NOLINT` in a test are read by clangd in the editor (`ADR-26.D6`), not by a gate. The diagnostics themselves are Kleio's half.
+   REFUSED 2026-09-11 not a defect, by law: `LSRC-1` (declared at `malf/malf`, the Founder 2026-08-31: *"excluding test files is wanted. tidy the test is unecessary and adds compute time for nothing"*) puts `tests/`, `benchmarks/`, `test_package/` and `technical_docs/` outside the clang-tidy surface unconditionally, and states it rests on no implementation fact. Argument comments and `NOLINT` in a test are read by clangd in the editor (`ADR-26.D6`), not by a gate. The diagnostics themselves are Kleio's half.
 8. **`gtest_main` is refused with no recorded reason** (Q4). All three `CMakeLists.txt` state it as
    a bare convention and the rest of the workspace — insight-canon, logcraft, insight-eidos,
    coderoast-server — links `GTest::gtest_main` freely. Either the reason exists and is unwritten,
