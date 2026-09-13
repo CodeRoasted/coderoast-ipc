@@ -124,6 +124,26 @@ TEST(SharedMemoryChannel, RefusesAnIntentChannelNameThatWouldNotFit)
     coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
+// refs: DN-102.D3
+TEST(SharedMemoryChannel, RefusesASlotCountWhoseSegmentSizeIsNotRepresentable)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    const auto name{unique_channel("slot_count_unrepresentable")};
+    const std::size_t unrepresentable{std::numeric_limits<std::size_t>::max() / sizeof(Frame) + 1U};
+    EXPECT_FALSE(Channel::segment_bytes(unrepresentable).has_value())
+        << unrepresentable << " slots × " << sizeof(Frame) << " B does not fit std::size_t";
+    EXPECT_THROW(
+        {
+            auto ch{Channel::create(
+                coderoast::ipc::ChannelConfig{.name = name, .slot_count = unrepresentable})};
+        },
+        std::invalid_argument)
+        << "slot_count " << unrepresentable << " × " << sizeof(Frame)
+        << " B wraps std::size_t; a create that proceeds maps a segment far smaller than the ring "
+           "its header indexes";
+    Channel::unlink(name);
+}
+
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);

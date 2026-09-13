@@ -440,13 +440,32 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         close();
     }
 
-    // post: throws std::invalid_argument on a zero slot_count or an intent_channel at or past
-    // kIntentChannelNameCapacity, before any segment exists; a stale segment is unlinked first.
+    // post: the bytes a channel of `slot_count` slots maps, header included; nullopt when that size
+    // is not representable in std::size_t.
+    [[nodiscard]] static std::optional<std::size_t> segment_bytes(std::size_t slot_count) noexcept
+    {
+        const auto offset{data_offset()};
+        if (slot_count > (std::numeric_limits<std::size_t>::max() - offset) / sizeof(Frame))
+        {
+            return std::nullopt;
+        }
+        return offset + (slot_count * sizeof(Frame));
+    }
+
+    // post: throws std::invalid_argument on a zero slot_count, a nullopt segment_bytes, or an
+    // intent_channel at or past kIntentChannelNameCapacity, before any segment exists.
+    // post: a stale segment of the same name is unlinked first.
     [[nodiscard]] static SharedMemorySpscChannel create(const ChannelConfig& config)
     {
         if (config.slot_count == 0U)
         {
             throw std::invalid_argument("IPC slot_count must be greater than zero");
+        }
+        const auto bytes{segment_bytes(config.slot_count)};
+        if (!bytes.has_value())
+        {
+            throw std::invalid_argument("IPC slot_count " + std::to_string(config.slot_count) +
+                                        " maps more bytes than std::size_t represents");
         }
 
         // refs: ADR-22.D4
@@ -464,7 +483,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         channel.policy_ = config.backpressure;
         channel.wait_strategy_ = config.wait_strategy;
         channel.unlink_on_destroy_ = config.unlink_on_destroy;
-        channel.map_size_ = map_size_for(config.slot_count);
+        channel.map_size_ = *bytes;
 
         if (config.unlink_before_create)
         {
@@ -776,11 +795,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     [[nodiscard]] static std::size_t data_offset() noexcept
     {
         return align_up(sizeof(SharedChannelHeader), alignof(Frame));
-    }
-
-    [[nodiscard]] static std::size_t map_size_for(std::size_t slot_count) noexcept
-    {
-        return data_offset() + (slot_count * sizeof(Frame));
     }
 
     void ensure_open() const
