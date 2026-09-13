@@ -8,7 +8,11 @@ set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 project(coderoast_ipc_core LANGUAGES CXX)
 
 # Warnings on for every first-party translation unit (Founder, 2026-09-10) — reported, not promoted.
+# A member a designated initializer omits is value-initialized ([dcl.init.aggr]), never
+# indeterminate, so that warning is off; clang keeps its positional arm, which gcc cannot split off.
 add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra>"
+                    "$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-missing-field-initializers>"
+                    "$<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-Wno-missing-designated-field-initializers>"
                     "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>")
 
 set(CMAKE_CXX_STANDARD 23)
