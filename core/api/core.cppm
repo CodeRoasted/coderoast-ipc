@@ -336,6 +336,13 @@ class AdaptiveWait
         return loops_;
     }
 
+    // post: whether the last wait() was taken past the spin and yield phases; meaningful for the
+    // Adaptive and AdaptivePark progressions, the two that have a sleep phase after both.
+    [[nodiscard]] bool past_yield_phase() const noexcept
+    {
+        return loops_ >= kYieldLoops;
+    }
+
     void reset() noexcept
     {
         loops_ = 0;
@@ -355,26 +362,42 @@ export namespace coderoast::ipc
 {
 
 // refs: DN-99.D3
-// invariant: WaitStrategy::Adaptive's empty-poll progression for a caller that owns no channel: a
-// paused spin, then yields, then 1 us sleeps, the progression a blocked push waits on.
+// invariant: WaitStrategy::Adaptive's paused spin and yields for a caller that owns no channel,
+// then sleeps that double from 1 us to kIdleSleepCeiling instead of Adaptive's flat 1 us.
+// invariant: the tail is this door's alone — a blocked push must resume the moment a slot frees,
+// while an idle poller at a flat 1 us wakes tens of thousands of times a second to find nothing.
 // invariant: the header it hands AdaptiveWait is null, which Adaptive never reads, so this door
 // exposes no SharedChannelHeader.
 class AdaptivePoll
 {
   public:
+    // post: no single sleep exceeds kIdleSleepCeiling, which bounds how late the first frame after
+    // an idle stretch and a stop request are seen.
     void wait() noexcept
     {
-        wait_.wait(nullptr);
+        if (!wait_.past_yield_phase())
+        {
+            wait_.wait(nullptr);
+            return;
+        }
+        std::this_thread::sleep_for(idle_sleep_);
+        idle_sleep_ = std::min(idle_sleep_ * kIdleSleepGrowth, kIdleSleepCeiling);
     }
 
     // post: the next wait() starts the progression over, from the paused spin.
     void reset() noexcept
     {
         wait_.reset();
+        idle_sleep_ = kFirstIdleSleep;
     }
 
   private:
+    static constexpr std::chrono::microseconds kFirstIdleSleep{2};
+    static constexpr int kIdleSleepGrowth{2};
+    static constexpr std::chrono::microseconds kIdleSleepCeiling{1000};
+
     AdaptiveWait wait_{WaitStrategy::Adaptive};
+    std::chrono::microseconds idle_sleep_{kFirstIdleSleep};
 };
 
 template <FrameLike Frame> class SharedMemorySpscChannel
