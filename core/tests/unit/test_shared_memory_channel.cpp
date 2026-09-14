@@ -1,4 +1,8 @@
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
+
+#include <cerrno>
 
 #include <gtest/gtest.h>
 
@@ -48,8 +52,6 @@ TEST(SharedMemorySpscChannel, PushesAndPopsLineFramesInOrder)
     EXPECT_EQ(out.header.sequence, 2U);
     EXPECT_EQ(payload_of(out), "two");
     EXPECT_FALSE(consumer.try_pop(out));
-
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
@@ -64,8 +66,6 @@ TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
     EXPECT_TRUE(producer.push(make_frame(1, "one")));
     EXPECT_FALSE(producer.push(make_frame(2, "two")));
     EXPECT_EQ(producer.stats().dropped, 1U);
-
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 // refs: ADR-22.D4
@@ -85,7 +85,6 @@ TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
 
     producer.close();
     consumer.close();
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 // refs: ADR-22.D4, ADR-22.D5
@@ -104,7 +103,6 @@ TEST(SharedMemoryChannel, UndeclaredIntentChannelIsUnspecifiedNotAConcreteName)
 
     producer.close();
     consumer.close();
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 // refs: ADR-22.D4
@@ -121,7 +119,6 @@ TEST(SharedMemoryChannel, RefusesAnIntentChannelNameThatWouldNotFit)
         std::invalid_argument)
         << "a name that does not fit must be refused at create, not silently clipped to " +
                std::to_string(coderoast::ipc::kIntentChannelNameCapacity - 1U) + " bytes";
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 // refs: DN-102.D3
@@ -141,7 +138,33 @@ TEST(SharedMemoryChannel, RefusesASlotCountWhoseSegmentSizeIsNotRepresentable)
         << "slot_count " << unrepresentable << " × " << sizeof(Frame)
         << " B wraps std::size_t; a create that proceeds maps a segment far smaller than the ring "
            "its header indexes";
-    Channel::unlink(name);
+}
+
+// invariant: a truncated segment is the shape a corrupt or hostile header takes: its slot count
+// indexes past what the mapping holds.
+TEST(SharedMemoryChannel, OpenRefusesAHeaderWhoseSlotCountTheMappedSizeCannotHold)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    constexpr std::size_t kHeaderSlots{4U};
+    const auto name{unique_channel("slot_count_past_mapping")};
+    const auto producer{
+        Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = kHeaderSlots})};
+    const auto claimed{Channel::segment_bytes(kHeaderSlots).value_or(0U)};
+    const auto held{Channel::segment_bytes(1U).value_or(0U)};
+    {
+        const auto path{"/" + name};
+        const int descriptor{::shm_open(path.c_str(), O_RDWR, 0)};
+        ASSERT_GE(descriptor, 0) << "shm_open('" << path << "'): "
+                                 << std::error_code(errno, std::generic_category()).message();
+        const bool truncated{::ftruncate(descriptor, static_cast<off_t>(held)) == 0};
+        static_cast<void>(::close(descriptor));
+        ASSERT_TRUE(truncated) << "ftruncate to " << held << " B failed";
+    }
+
+    EXPECT_THROW(
+        { const auto consumer{Channel::open(name)}; }, std::runtime_error)
+        << "the header claims " << kHeaderSlots << " slots, " << claimed << " B, over a mapping of "
+        << held << " B; an open that accepts it pops and pushes past the end of its mapping";
 }
 
 int main(int argc, char** argv)

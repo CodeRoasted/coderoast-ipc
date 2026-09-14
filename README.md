@@ -125,15 +125,37 @@ if (consumer.try_pop(out)) {
         out.header.payload_size) << "\n";
 }
 
-Channel::unlink("myapp.pipeline");   // remove the named segment
+// Nothing to remove: the producer created the name, so it unlinks it when it
+// closes, and a consumer attached before that keeps draining its mapping.
 ```
 
 *Frames are passed **by value**: `push`/`try_pop` copy a whole `Frame` in and out. There is
 no acquire/commit slot-borrow API — the same shape is exercised in
 `core/tests/unit/test_shared_memory_channel.cpp`, which is what makes this snippet compile.*
 
+**Segment lifetime.** A segment's name exists only while a live producer owns it:
+
+- **The producer unlinks what it created.** Closing or destroying a `create()` handle unlinks the
+  name, but only while the name still resolves to the segment that handle created. A second
+  `create()` of the same name (which unlinks the first's name before creating) is therefore never
+  undone by the first handle's close. An `open()` handle never unlinks. Unlinking removes a name,
+  not a mapping: a consumer attached before the close drains to `Closed`.
+- **A crashed producer's segments are reclaimed on proof.** Every header records its producer's pid,
+  that pid's start time and its pid namespace. `reap_orphaned_segments()` reads each `/dev/shm`
+  header through a descriptor and unlinks a segment only when its owner is absent from this pid
+  namespace or runs with another start time. A live owner, another pid namespace, a foreign file or
+  another ABI version is kept. Call it once at a producer process's start; `create()` never reaps.
+- **A full tmpfs refuses the create.** `create()` reserves the segment's bytes with
+  `posix_fallocate` before mapping it, so a tmpfs that cannot hold it throws a `std::runtime_error`
+  naming the channel, the bytes and the errno, and leaves no name, instead of killing the process
+  with `SIGBUS` on the first write.
+- **`open()` trusts no header size.** It refuses a segment whose header slot count maps any size but
+  the segment's own, and it indexes the ring with the slot count it checked, never the live header
+  field.
+
 **Key Types:**
 - `SharedMemorySpscChannel<Frame>` - SPSC queue template; `create()` / `open()` / `unlink()`
+- `reap_orphaned_segments()` - reclaims the segments of dead producers (`SegmentVerdict`)
 - `DefaultLineFrame` - 4KB payload frames (`LineFrame<N>` for another size)
 - `LineFrameHeader` - Transport sequence, causal key, timestamp, format, payload metadata
 - `BackpressurePolicy` - Block, DropNewest
@@ -397,7 +419,7 @@ boundary, and implicit padding would put indeterminate bytes on the wire. A `sta
 build.
 
 ABI version constants ensure compatibility:
-- `kSharedChannelAbiVersion = 5`
+- `kSharedChannelAbiVersion = 6` (6 added the producer's owner record to the shared header)
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
 should reconstruct canonical order with `(logical_tick, agent_order,

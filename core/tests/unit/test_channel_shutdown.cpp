@@ -49,10 +49,7 @@ struct ScopedChannel
     ScopedChannel& operator=(const ScopedChannel&) = delete;
     ScopedChannel(ScopedChannel&&) = delete;
     ScopedChannel& operator=(ScopedChannel&&) = delete;
-    ~ScopedChannel()
-    {
-        Channel::unlink(name);
-    }
+    ~ScopedChannel() = default;
 };
 } // namespace
 
@@ -239,6 +236,4 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
     EXPECT_LT(std::chrono::steady_clock::now() - t0, 2s)
         << "parked producer not woken; destructor would hang";
     EXPECT_EQ(push_result.load(), coderoast::ipc::PushStatus::Aborted);
-
-    Channel::unlink(name);
 }

@@ -66,13 +66,7 @@ struct ProducerHarness
         }
     }
 
-    ~ProducerHarness()
-    {
-        for (std::size_t shard_id{0}; shard_id < producers.size(); ++shard_id)
-        {
-            Channel::unlink(coderoast::ipc::shard_channel_name(base, shard_id));
-        }
-    }
+    ~ProducerHarness() = default;
 
     ProducerHarness(const ProducerHarness&) = delete;
     ProducerHarness& operator=(const ProducerHarness&) = delete;

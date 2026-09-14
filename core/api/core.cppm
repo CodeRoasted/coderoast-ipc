@@ -96,7 +96,7 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) 
 };
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL};
-inline constexpr std::uint32_t kSharedChannelAbiVersion{5U};
+inline constexpr std::uint32_t kSharedChannelAbiVersion{6U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
 // invariant: capacity including the NUL; a longer name is refused at create(), never truncated.
@@ -152,10 +152,10 @@ struct ChannelConfig
     std::size_t slot_count{kDefaultSharedChannelSlotCount};
     BackpressurePolicy backpressure{BackpressurePolicy::Block};
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
-    // invariant: create() unlinks a stale segment of the same name first, and nothing unlinks on
-    // destroy unless asked, so a consumer can still open what a finished producer left behind.
+    // refs: DN-102.D1
+    // invariant: create() unlinks a stale segment of the same name first; the producer handle
+    // unlinks the name when it closes, and only while the name still resolves to its own segment.
     bool unlink_before_create{true};
-    bool unlink_on_destroy{false};
     // refs: ADR-22.D4
     // invariant: the IntentChannel this ring transports, spelled in full because `name` above is
     // the ring's own name. Empty means the producer declared nothing.
@@ -171,6 +171,50 @@ struct ChannelStats
     std::uint64_t wait_loops{0};
     ChannelState state{ChannelState::Open};
 };
+
+// refs: DN-102.D2
+// invariant: the producer a segment's header names: its pid, that pid's start time (field 22 of
+// /proc/<pid>/stat) and the inode of its pid namespace; a zero field means /proc could not say.
+struct SegmentOwner
+{
+    std::uint64_t start_time{0};
+    std::uint64_t pid_namespace{0};
+    std::int32_t pid{0};
+    // invariant: explicit tail padding, so the owner tiles exactly inside the shared header.
+    std::uint32_t reserved{0};
+};
+
+static_assert(std::has_unique_object_representations_v<SegmentOwner>);
+
+enum class SegmentVerdict : std::uint8_t
+{
+    Alive,
+    Orphaned,
+    Unknown,
+};
+
+struct ReapedSegment
+{
+    std::string name;
+    SegmentVerdict verdict{SegmentVerdict::Unknown};
+    bool removed{false};
+};
+
+// post: this process's owner; a field /proc cannot supply stays zero.
+[[nodiscard]] SegmentOwner current_segment_owner();
+
+// refs: DN-102.D2
+// post: Alive when the owner's pid runs in this pid namespace with the recorded start time.
+// post: Orphaned when that pid is absent from this pid namespace or runs with another start time.
+// post: Unknown for another pid namespace, a zero field, or a /proc entry that cannot be read.
+[[nodiscard]] SegmentVerdict judge_segment_owner(const SegmentOwner& owner);
+
+// refs: DN-102.D2
+// post: every /dev/shm regular file whose name starts with `name_prefix`, judged from its header
+// as read through a descriptor, never a mapping, so a short or foreign file cannot fault.
+// post: a foreign magic, another ABI version or a short file is Unknown; only an Orphaned segment
+// is unlinked, and only while its name still resolves to the segment judged.
+[[nodiscard]] std::vector<ReapedSegment> reap_orphaned_segments(std::string_view name_prefix = {});
 
 } // namespace coderoast::ipc
 
@@ -213,18 +257,39 @@ inline void cpu_pause() noexcept
 
 inline constexpr std::size_t kCacheLineBytes{64U};
 
+// refs: DN-102.D1
+// invariant: a segment's identity is its object's (st_dev, st_ino), which no later segment created
+// under the same name shares while this one exists.
+struct SegmentIdentity
+{
+    std::uint64_t device{0};
+    std::uint64_t inode{0};
+};
+
+struct CreatedSegment
+{
+    int descriptor{-1};
+    SegmentIdentity identity;
+};
+
 // refs: ADR-3.D4, F-SRC-coderoast-ipc:core_impl.cpp
 // invariant: defined in the textual impl unit, which owns the POSIX macros this import-std
 // interface cannot see; the boundary crosses primitives only.
 // post: a valid descriptor or a throw — never a negative fd, here and at shm_open_existing.
-[[nodiscard]] int shm_open_create(const char* name);
+[[nodiscard]] CreatedSegment shm_open_create(const char* name);
 [[nodiscard]] int shm_open_existing(const char* name);
-void shm_truncate(int descriptor, std::size_t size);
+// refs: DN-102.D3
+// post: `size` bytes are reserved for the object, or a throw naming the channel, the bytes and the
+// errno, so a full tmpfs refuses here instead of faulting a later write.
+void shm_reserve(int descriptor, std::size_t size, const char* channel);
 [[nodiscard]] std::size_t shm_fstat_size(int descriptor);
 [[nodiscard]] void* shm_map(int descriptor, std::size_t size);
 void shm_unmap(void* address, std::size_t size) noexcept;
 void close_descriptor(int descriptor) noexcept;
 void shm_unlink_name(const char* name) noexcept;
+// post: `name` is unlinked only if it still resolves to `identity`; true when it was.
+// note: POSIX has no unlink by inode, so a create racing its compare and unlink is undefended.
+bool shm_unlink_if_identity(const char* name, SegmentIdentity identity) noexcept;
 
 struct alignas(kCacheLineBytes) Cursor
 {
@@ -249,6 +314,11 @@ struct SharedChannelHeader
     // all-zero means Unspecified.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
+    // refs: DN-102.D2, DN-102.D4
+    // invariant: written once at create() and read only by the reaper, so no content, ordering or
+    // window-membership surface depends on it.
+    SegmentOwner owner{};
+
     alignas(kCacheLineBytes) std::atomic<std::uint32_t> wake_epoch{0};
     alignas(kCacheLineBytes) std::atomic<std::uint32_t> parker_count{0};
 
@@ -264,6 +334,8 @@ struct SharedChannelHeader
 };
 
 static_assert(alignof(SharedChannelHeader) >= kCacheLineBytes);
+// invariant: standard layout, so the reaper reads a field at its offsetof from bytes it pread.
+static_assert(std::is_standard_layout_v<SharedChannelHeader>);
 
 class AdaptiveWait
 {
@@ -455,6 +527,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     // post: throws std::invalid_argument on a zero slot_count, a nullopt segment_bytes, or an
     // intent_channel at or past kIntentChannelNameCapacity, before any segment exists.
     // post: a stale segment of the same name is unlinked first.
+    // post: from the moment the name exists the handle is its producer, so a throw past that point
+    // unlinks it through close(), identity-checked like every close.
+    // refs: DN-102.D3
+    // post: throws std::runtime_error, leaving no name, when the tmpfs cannot reserve the segment.
     [[nodiscard]] static SharedMemorySpscChannel create(const ChannelConfig& config)
     {
         if (config.slot_count == 0U)
@@ -482,16 +558,19 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         channel.name_ = normalise_channel_name(config.name);
         channel.policy_ = config.backpressure;
         channel.wait_strategy_ = config.wait_strategy;
-        channel.unlink_on_destroy_ = config.unlink_on_destroy;
         channel.map_size_ = *bytes;
+        channel.slot_count_ = config.slot_count;
 
         if (config.unlink_before_create)
         {
             shm_unlink_name(channel.name_.c_str());
         }
 
-        channel.fd_ = shm_open_create(channel.name_.c_str());
-        shm_truncate(channel.fd_, channel.map_size_);
+        const auto created{shm_open_create(channel.name_.c_str())};
+        channel.fd_ = created.descriptor;
+        channel.identity_ = created.identity;
+        channel.is_producer_ = true;
+        shm_reserve(channel.fd_, channel.map_size_, channel.name_.c_str());
         channel.map_memory();
         std::memset(channel.mapping_, 0, channel.map_size_);
         auto* header{new (channel.mapping_) SharedChannelHeader{}};
@@ -501,14 +580,16 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         // Unspecified and the copy keeps the NUL (size < capacity, checked above).
         std::memcpy(header->intent_channel.data(), config.intent_channel.data(),
                     config.intent_channel.size());
+        header->owner = current_segment_owner();
         channel.header_ = header;
         channel.validate_header();
-        channel.is_producer_ = true;
         return channel;
     }
 
     // post: throws std::runtime_error when the mapped header's magic, ABI version, slot size or
     // slot count disagrees with this build's: both ends instantiate one Frame, or neither opens.
+    // post: throws std::runtime_error when the header's slot count maps any size but the segment's,
+    // so no header indexes past the mapping.
     [[nodiscard]] static SharedMemorySpscChannel
     open(std::string_view name, BackpressurePolicy backpressure = BackpressurePolicy::Block,
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)
@@ -519,8 +600,17 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         channel.wait_strategy_ = wait_strategy;
         channel.fd_ = shm_open_existing(channel.name_.c_str());
         channel.map_size_ = shm_fstat_size(channel.fd_);
+        if (channel.map_size_ < data_offset())
+        {
+            throw std::runtime_error(
+                std::format("IPC shared-memory channel '{}' is {} B, shorter than its {} B header",
+                            channel.name_, channel.map_size_, data_offset()));
+        }
         channel.map_memory();
         channel.header_ = static_cast<SharedChannelHeader*>(channel.mapping_);
+        // assert: read once and kept, so a writer changing the header after this check cannot
+        // move the ring past the mapping.
+        channel.slot_count_ = static_cast<std::size_t>(channel.header_->slot_count);
         channel.validate_header();
         return channel;
     }
@@ -545,7 +635,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
     [[nodiscard]] std::size_t slot_count() const noexcept
     {
-        return header_ == nullptr ? 0U : static_cast<std::size_t>(header_->slot_count);
+        return header_ == nullptr ? 0U : slot_count_;
     }
 
     [[nodiscard]] bool empty() const noexcept
@@ -763,6 +853,9 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         };
     }
 
+    // refs: DN-102.D1
+    // post: the mapping and descriptor are released; a producer handle also unlinks its name while
+    // that name still resolves to the segment it created, and a consumer handle never unlinks.
     void close() noexcept
     {
         if (mapping_ != nullptr && map_size_ > 0U)
@@ -773,15 +866,16 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             close_descriptor(fd_);
         }
-        if (unlink_on_destroy_ && !name_.empty())
+        if (is_producer_ && !name_.empty())
         {
-            shm_unlink_name(name_.c_str());
+            static_cast<void>(shm_unlink_if_identity(name_.c_str(), identity_));
         }
         mapping_ = nullptr;
         header_ = nullptr;
         fd_ = -1;
         map_size_ = 0U;
-        unlink_on_destroy_ = false;
+        slot_count_ = 0U;
+        identity_ = {};
         is_producer_ = false;
     }
 
@@ -815,22 +909,32 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         ensure_open();
         if (header_->magic != kSharedChannelMagic ||
             header_->abi_version != kSharedChannelAbiVersion ||
-            header_->slot_size != sizeof(Frame) || header_->slot_count == 0U)
+            header_->slot_size != sizeof(Frame) || slot_count_ == 0U)
         {
             throw std::runtime_error("IPC shared-memory channel header is incompatible");
+        }
+        const auto expected{segment_bytes(slot_count_)};
+        if (!expected.has_value() || *expected != map_size_)
+        {
+            throw std::runtime_error(std::format("IPC shared-memory channel '{}' header claims {} "
+                                                 "slots, {} B, over a mapping of {} B",
+                                                 name_, slot_count_,
+                                                 expected.has_value() ? std::to_string(*expected)
+                                                                      : "more than size_t holds",
+                                                 map_size_));
         }
     }
 
     [[nodiscard]] void* slot_ptr(std::uint64_t sequence) noexcept
     {
-        const auto index{sequence % header_->slot_count};
+        const auto index{sequence % slot_count_};
         auto* base{static_cast<std::byte*>(mapping_)};
         return base + data_offset() + (index * sizeof(Frame));
     }
 
     [[nodiscard]] const void* slot_ptr(std::uint64_t sequence) const noexcept
     {
-        const auto index{sequence % header_->slot_count};
+        const auto index{sequence % slot_count_};
         const auto* base{static_cast<const std::byte*>(mapping_)};
         return base + data_offset() + (index * sizeof(Frame));
     }
@@ -839,7 +943,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     {
         const auto write{header_->write_sequence.value.load(std::memory_order_relaxed)};
         const auto read{header_->read_sequence.value.load(std::memory_order_acquire)};
-        if (write - read >= header_->slot_count)
+        if (write - read >= slot_count_)
         {
             if (count_drop)
             {
@@ -881,9 +985,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         mapping_ = std::exchange(other.mapping_, nullptr);
         header_ = std::exchange(other.header_, nullptr);
         map_size_ = std::exchange(other.map_size_, 0U);
+        slot_count_ = std::exchange(other.slot_count_, 0U);
         policy_ = other.policy_;
         wait_strategy_ = other.wait_strategy_;
-        unlink_on_destroy_ = std::exchange(other.unlink_on_destroy_, false);
+        identity_ = std::exchange(other.identity_, {});
         is_producer_ = std::exchange(other.is_producer_, false);
     }
 
@@ -892,9 +997,12 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     void* mapping_{nullptr};
     SharedChannelHeader* header_{nullptr};
     std::size_t map_size_{0};
+    // invariant: the slot count validate_header checked against map_size_; the ring indexes with
+    // it, never with the header's field.
+    std::size_t slot_count_{0};
     BackpressurePolicy policy_{BackpressurePolicy::Block};
     WaitStrategy wait_strategy_{WaitStrategy::Adaptive};
-    bool unlink_on_destroy_{false};
+    SegmentIdentity identity_{};
     bool is_producer_{false};
 };
 

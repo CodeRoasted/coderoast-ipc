@@ -116,7 +116,12 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
         set_target_properties(coderoast_ipc_core_tests PROPERTIES
             CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
         include(GoogleTest)
-        gtest_discover_tests(coderoast_ipc_core_tests)
+        # A googletest skip exits 0, so without this property ctest counts a skipped case as
+        # PASSED; with it the case is listed under "The following tests did not run". Today that is
+        # SegmentReservation's full-tmpfs arm on a host that refuses an unprivileged mount namespace.
+        # The regex matches googletest's own skip banner; the two spaces are part of it.
+        gtest_discover_tests(coderoast_ipc_core_tests
+            PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
 
         # (The standalone module-import proof is retired: every unit test now `import`s the
         #  module via the aggregate — the import path is exercised by the whole suite.)

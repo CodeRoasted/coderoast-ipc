@@ -43,7 +43,6 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
         benchmark::DoNotOptimize(consumer.try_pop(out));
     }
     state.counters["slots"] = static_cast<double>(state.range(0));
-    coderoast::ipc::SharedMemorySpscChannel<Frame>::unlink(name);
 }
 
 BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
