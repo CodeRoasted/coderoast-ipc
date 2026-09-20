@@ -56,8 +56,11 @@ jobs:
   # HOSTED IN EVERY PACKAGE COPY. This job compiles nothing, needs no conan cache, no corpus byte
   # root and no `malf` build slot — it is two HTTP reads. Pinning it to the warehouse runner would
   # serialise every cut behind one box and would put a self-hosted runner in a public repository's
-  # release path. `ubuntu-latest` also guarantees `gh`, which the refusal below still checks rather
-  # than assumes.
+  # release path. `ubuntu-latest` also guarantees `gh` AND `python3`, and the refusals below check
+  # both rather than assume either: a runner image is a third party's declaration, and this step
+  # has two interpreters that can be absent. Until 2026-09-20 only `gh` was checked, so a runner
+  # without `python3` ended the job at exit 127 with NO output at all — a silent refusal, which
+  # is the one failure shape this job forbids by name.
   attest:
     # INV-22-DELTA runner
     runs-on: ubuntu-latest
@@ -151,6 +154,10 @@ jobs:
             echo "::error::REFUSED — gh is not on this runner, so $RECORD_REPO's build record cannot be read. An attestation that cannot read the record is not an attestation: $TAG would publish over a tree nothing judged."
             exit 1
           }
+          command -v python3 >/dev/null 2>&1 || {
+            echo "::error::REFUSED — python3 is not on this runner, so a build record read from $RECORD_REPO could not be parsed or compared. The comparison below IS a python3 program: it is written to the runner's temp directory and executed once per candidate, and without the interpreter that call exits 127 having printed NOTHING — no ::error::, no reason, and no statement that nothing was established. A silent refusal is the one failure shape this step forbids by name, and it is checked here for the same reason gh is checked one line above: the two interpreters this step depends on are both absent-able, and only one of them used to say so."
+            exit 1
+          }
           if [ -z "${RECORD_TOKEN:-}" ]; then
             echo "::error::REFUSED — RECORD_TOKEN is empty, so this job cannot read $RECORD_REPO's build record and cannot establish anything about $TAG. This is a refusal and never a skip. In a package repository RECORD_TOKEN is the organisation secret BUILD_RECORD_READ_TOKEN — a fine-grained PAT whose repository access is CodeRoasted/coderoast ALONE, carrying exactly one repository permission, Actions: Read-only — so an empty value means that secret is not granted to $REPO. In the superproject it is that repository's own github.token, which can only be empty if this job's permissions block dropped 'actions: read'."
             exit 1
@@ -176,12 +183,32 @@ jobs:
             echo "::notice::$TAG resolves to $TAGGED_SHA; this run was dispatched from $DISPATCHED_FROM. The attestation below judges the TAG's commit, which is the tree the publish jobs will build from."
           fi
 
-          # The successful pharos-build runs ON main, newest first. A run is successful only when
-          # EVERY job in it is green — the `build` job AND the gates that are not check modules and
-          # sit beside it — which is what makes a sibling job of `build` part of step 0 exactly as
-          # firmly as a check module is (DN-108.D15).
+          # The successful pharos-build runs ON main, NEWEST FIRST — AND THE ORDER IS ESTABLISHED
+          # HERE RATHER THAN TAKEN ON THE API'S WORD. The list endpoint declares no ordering
+          # guarantee, so the `--jq` expression SORTS. The key is the run id: GitHub allocates it
+          # when the run is created and it increases monotonically, so it is a total order over
+          # "which build started later" with no timezone, no string comparison and no float.
+          # `created_at` orders the same events and is not used because it is a formatted timestamp
+          # where `.id` is an integer, and an integer sort cannot be wrong about its own collation.
+          #
+          # WITHOUT THE SORT THIS STEP'S OWN SUCCESS LINE WAS A CLAIM NOTHING HAD MEASURED. It
+          # prints "examined, newest first"; the order was whatever the server returned. Measured
+          # 2026-09-20 with a stub returning an older matching run first: the step attested against
+          # run 100 at exit 0 and never mentioned run 200, the newer one carrying a record for the
+          # same version. That is "the most recent run" degrading into "the first one the API
+          # happened to hand me" — the same disease as "the most recent one I could READ", which
+          # this whole job exists to cure, reached through the other door.
+          #
+          # THE WINDOW IS ONE PAGE OF 50, AND THE REFUSALS BELOW SAY SO RATHER THAN DIAGNOSING A
+          # BUILD THAT NEVER RAN. A record older than the 50 most recent successes on main is not
+          # reachable from here; the remedy — re-run step 0 — is the same, but the sentence has to
+          # be true.
+          #
+          # A run is successful only when EVERY job in it is green — the `build` job AND the gates
+          # that are not check modules and sit beside it — which is what makes a sibling job of
+          # `build` part of step 0 exactly as firmly as a check module is (DN-108.D15).
           runs_rc=0
-          runs="$(GH_TOKEN="$RECORD_TOKEN" gh api -X GET "repos/$RECORD_REPO/actions/workflows/pharos-build.yml/runs" -f branch=main -f status=success -f per_page=50 --jq '.workflow_runs[].id' 2>"$workdir/runs.err")" || runs_rc=$?
+          runs="$(GH_TOKEN="$RECORD_TOKEN" gh api -X GET "repos/$RECORD_REPO/actions/workflows/pharos-build.yml/runs" -f branch=main -f status=success -f per_page=50 --jq '[.workflow_runs[].id] | sort | reverse | .[]' 2>"$workdir/runs.err")" || runs_rc=$?
           runs_err="$(tr '\n' ' ' < "$workdir/runs.err")"
           if [ "$runs_rc" -ne 0 ]; then
             echo "::error::REFUSED — the GitHub API could not list $RECORD_REPO's successful \`pharos-build\` runs on main, so this job does not know what tree step 0 judged. gh exited $runs_rc and said: $runs_err — that is an authentication, permission, quota or transport fault, NOT an absent build, and it is deliberately not reported as one. The first thing to check is the token this job reads the record with: it needs Actions: Read-only on $RECORD_REPO. Nothing about $TAG has been established either way."
@@ -291,10 +318,11 @@ jobs:
 
           print(f"attested: the tag {tag} and {record_repo}'s build record for {version} agree that "
                 f"{package} is {tagged}")
-          print(f"  candidates: {examined} successful pharos-build run(s) on main examined, newest first; "
-                f"{passed_over} passed over as records for another version; 0 unreadable. An unreadable "
-                f"candidate newer than the chosen one is a refusal, never a substitution, so this line "
-                f"reading 0 is part of the attestation and not decoration.")
+          print(f"  candidates: {examined} successful pharos-build run(s) on main examined, newest first "
+                f"— ordered by run id in this job rather than in the order the API returned them, out of "
+                f"a window of at most 50; {passed_over} passed over as records for another version; "
+                f"0 unreadable. An unreadable candidate newer than the chosen one is a refusal, never a "
+                f"substitution, so this line reading 0 is part of the attestation and not decoration.")
           PY
 
           # NEWEST FIRST, AND THE FIRST READABLE RECORD FOR THIS VERSION WINS. `judge.py` exits 0
@@ -329,7 +357,7 @@ jobs:
             rm -rf "$dest"
           done
           if [ -z "$chosen" ]; then
-            echo "::error::REFUSED — none of the $examined successful \`pharos-build\` run(s) on main in $RECORD_REPO carries a record for version $version; every one of them was read and every one names another cut. A tag cut over a build that never saw its version is the window DN-108.D7 exists to close. The versions those records DO carry are deliberately not listed here: this log is public in three of the repositories that run this step, and the set of versions in recent build records is the unreleased version roadmap. Run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version, then re-tag."
+            echo "::error::REFUSED — none of the $examined successful \`pharos-build\` run(s) on main in $RECORD_REPO carries a record for version $version; every one of them was read and every one names another cut. THAT COUNT IS THE WINDOW, NOT THE HISTORY: this job reads ONE page of at most 50 successful runs, newest first, so if more than 50 successful builds have landed on main since the one for $version, that build is outside what this step can see and its record was never examined. The remedy is the same on both paths and the diagnosis is not, which is why the window is stated. A tag cut over a build that never saw its version is the window DN-108.D7 exists to close. The versions those records DO carry are deliberately not listed here: this log is public in three of the repositories that run this step, and the set of versions in recent build records is the unreleased version roadmap. Run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version, then re-tag."
             exit 1
           fi
           # INV-22-DELTA record-copy
