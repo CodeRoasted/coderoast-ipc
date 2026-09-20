@@ -18,40 +18,88 @@ permissions:
 jobs:
   # ── The tag's ONE gate, and it is DERIVED: this tree is the tree step 0 judged ────────────────
   # WHAT THIS IS. `.github/workflows/pharos-build.yml` in CodeRoasted/coderoast (the private
-  # superproject) runs `./pharos build <V>` over every sibling repository at its candidate head
-  # BEFORE any tag exists, and writes `preflight.json` — every repository's verified SHA, every
-  # check module's verdict, the toolchain verbs' exit codes and the version it was built for
+  # superproject) runs `./pharos build <V>` over every repository in the workspace at its candidate
+  # head BEFORE any tag exists, and writes `preflight.json` — every repository's verified SHA,
+  # every check module's verdict, the toolchain verbs' exit codes and the version it was built for
   # (DN-108.D6, DN-108.D14). This job proves that the commit THIS tag points at is the commit that
-  # record verified for this repository, and refuses the tag otherwise. It re-runs no gate: one API
-  # read and one string compare (DN-108.D7). Everything else in this file `needs: attest`, so a
+  # record verified for this repository, and refuses the tag otherwise. It re-runs no gate: two API
+  # reads and one string compare (DN-108.D7). Everything else in this file `needs: attest`, so a
   # refusal lands BEFORE any publish step runs.
   #
   # IT IS A PLAIN STEP AND NEVER A REUSABLE WORKFLOW (DN-108.O2, Founder, 2026-09-16). Some of the
   # repositories that carry it are PUBLIC, and a `uses:` of a workflow living in the private
   # superproject would depend on an org setting nobody verified. The ruling's price is that this
-  # job is DUPLICATED, and the price of duplication is drift — so `pin_coherence`'s INV-22 compares
-  # this whole job, byte for byte, across every `release.yaml` in the workspace that carries one,
-  # and reds naming the file that diverged. Change it in one repository and
-  # `./pharos check --module pin_coherence` stays red until every copy agrees.
+  # job is DUPLICATED EIGHT TIMES — the seven released package repositories plus the superproject's
+  # own tag — and the price of duplication is drift, so `pin_coherence`'s INV-22 compares this
+  # whole job across all eight and reds naming the file that diverged. Change it in one repository
+  # and `./pharos check --module pin_coherence` stays red until every copy agrees.
   #
-  # HOSTED, NEVER `vars.CI_RUNS_ON`, IN EVERY COPY. This job compiles nothing, needs no conan
-  # cache, no corpus byte root and no `malf` build slot — it is two HTTP reads. Pinning it to the
-  # warehouse runner would serialise every cut behind one box and would put a self-hosted runner in
-  # a public repository's release path. `ubuntu-latest` also guarantees `gh`, which the refusal
-  # below still checks rather than assumes.
+  # THE SUPERPROJECT IS INSIDE THAT COMPARISON, AS A DECLARED DELTA RATHER THAN AS AN EXCLUSION.
+  # Until 2026-09-20 INV-22 excluded it, and the copy nothing compared was the weakest of the
+  # eight: it turned an unreadable record into "no version" and walked on to an older run, and its
+  # run-list call died under `set -euo pipefail` printing `gh: HTTP 403` with no `::error::` and no
+  # statement that nothing had been established. An exclusion is how two copies separate. So the
+  # five places where the superproject genuinely differs are FENCED BY NAME, between the
+  # `INV-22-DELTA` / `INV-22-DELTA-END` marker comments that every copy carries:
+  #   · `runner`        — the superproject may schedule this on its own runner variable;
+  #   · `permissions`   — it writes Release assets and reads its OWN Actions runs;
+  #   · `record-source` — the record lives in the superproject, so that copy reads it with
+  #                       `github.token` while a package repository needs a cross-repository PAT;
+  #   · `record-copy` + `release-step` — the superproject alone attaches the record and the per-tag
+  #                       perf baseline to its Release, where they outlive the run artifact's
+  #                       90-day retention (DN-108.O2).
+  # INV-22 compares everything OUTSIDE those regions byte for byte across all eight copies,
+  # requires the seven package copies to agree INSIDE them as well, and requires the region names
+  # and their order to be identical everywhere — so a new divergence cannot be smuggled in by
+  # fencing it, and a region that stops differing is reported as dormant rather than left standing.
+  #
+  # HOSTED IN EVERY PACKAGE COPY. This job compiles nothing, needs no conan cache, no corpus byte
+  # root and no `malf` build slot — it is two HTTP reads. Pinning it to the warehouse runner would
+  # serialise every cut behind one box and would put a self-hosted runner in a public repository's
+  # release path. `ubuntu-latest` also guarantees `gh`, which the refusal below still checks rather
+  # than assumes.
   attest:
+    # INV-22-DELTA runner
     runs-on: ubuntu-latest
+    # INV-22-DELTA-END runner
+    # INV-22-DELTA permissions
     permissions:
-      contents: read   # resolve THIS repository's tag to its commit. Nothing else: the build
-                       # record is read from another repository with a token of its own.
+      contents: read   # resolve THIS repository's tag to its commit. Nothing else: the
+                       # build record is read from another repository with its own token.
+    # INV-22-DELTA-END permissions
     steps:
       - name: The tagged tree is the tree step 0 judged, and the record says so (GATING)
-        # EVERY FAILURE BELOW IS A REFUSAL, NEVER A SKIP, AND THAT IS THE WHOLE POINT. A missing
-        # `gh`, an empty or unauthorised token, no successful build, no record for this version, an
-        # expired artifact, an unparseable record, a record whose `built`/`cuttable` are not both
-        # true, or this repository absent from the record — each one means the same thing: the tag
-        # is about to publish over a tree nothing judged, which is precisely the window this job
-        # exists to close. A skip would close it only while everything works.
+        # EVERY FAILURE BELOW IS A REFUSAL — NEVER A SKIP AND NEVER A SUBSTITUTION — AND THAT IS
+        # THE WHOLE POINT. A missing `gh`, an empty token, no successful build, no record for this
+        # version, an artifact that will not download, an unparseable record, a record whose
+        # `built`/`cuttable` are not both true, or this repository absent from the record: each one
+        # means the same thing, that the tag is about to publish over a tree nothing judged, which
+        # is precisely the window this job exists to close. A skip would close it only while
+        # everything works.
+        #
+        # "THE MOST RECENT SUCCESSFUL RUN" MEANS THE MOST RECENT ONE — NOT THE MOST RECENT ONE THIS
+        # JOB COULD READ. The loop below walks the successful `pharos-build` runs newest first and
+        # STOPS at the first record naming this version. A candidate it cannot download, or whose
+        # artifact carries no `preflight.json`, or whose record is not readable JSON, ENDS the job
+        # with a refusal naming that run and the error; it never falls through to an older one. The
+        # first version of this step did fall through (`|| continue`, with the error surfaced only
+        # once EVERY candidate had failed), so a rate limit, a 5xx or a dropped connection on the
+        # NEWEST run silently promoted an older build's record. Measured 2026-09-20: an
+        # undownloadable newest run plus an older run for the same version produced `attested: …`
+        # at exit 0, with no mention anywhere that a newer run existed. A record that cannot be
+        # read is a REFUSAL, not permission to use an older one — attesting against an earlier
+        # build is the DN-108.D7 window reopened inside the job that closes it.
+        #
+        # A RECORD FOR ANOTHER VERSION IS A DIFFERENT THING and is not a refusal: it was read, it
+        # was judged not to be this cut's record, and the job says so as it passes over it. The
+        # success line prints how many runs were examined and how many were passed over, because a
+        # green that says nothing about what it walked past cannot be audited. Stopping at the
+        # first match is also what bounds the cost: one artifact download on the ordinary path
+        # instead of up to fifty per repository per tag.
+        #
+        # THE RUN LIST IS BOUND TO `main`. `pharos-build.yml` is `workflow_dispatch` only, so
+        # without `branch=main` a dispatch on ANY branch — including one on which
+        # `pharos-build.yml` itself was edited — writes a record these tags would accept.
         #
         # AND A REFUSAL NAMES *WHICH* FAILURE HAPPENED. Collapsing an auth fault into "no build
         # exists" produces a sentence that is false on the path that reaches it most often, and
@@ -68,21 +116,32 @@ jobs:
         # the window reopened inside the mechanism that closes it. There is deliberately no
         # fallback to `github.sha`, because the fallback is exactly the bug. Do not "simplify" it.
         #
-        # TWO TOKENS, AND EACH IS SCOPED TO ONE REPOSITORY. `github.token` cannot read another
-        # repository's Actions runs, and the superproject is private, so the record is read with
-        # `BUILD_RECORD_READ_TOKEN`: a fine-grained PAT whose repository access is
-        # `CodeRoasted/coderoast` ALONE and whose only permission is `Actions: Read-only`. It grants
-        # nothing over this repository, and this repository's own `github.token` grants nothing over
-        # the superproject — neither token is a step up for the other.
+        # TWO TOKENS, AND EACH IS SCOPED TO ONE REPOSITORY. `OWN_TOKEN` resolves THIS repository's
+        # tag; `RECORD_TOKEN` reads the build record where it lives. In a package repository those
+        # are different repositories, so `RECORD_TOKEN` is `BUILD_RECORD_READ_TOKEN`: a
+        # fine-grained PAT whose repository access is `CodeRoasted/coderoast` ALONE and whose only
+        # permission is `Actions: Read-only`. It grants nothing over this repository, and this
+        # repository's own `github.token` grants nothing over the superproject — neither token is a
+        # step up for the other. In the superproject the record is in the same repository and both
+        # are `github.token`; that is the `record-source` delta region and nothing else changes.
+        #
+        # THE STEP DECLARES ITS OWN `shell:`. A workflow-level `defaults.run.shell` would otherwise
+        # change what this step EXECUTES while the job text INV-22 hashes stayed byte-identical —
+        # measured 2026-09-20, inserting `defaults: {run: {shell: python}}` above left the digest
+        # at 90be07cdcc736a03 on both sides. Declaring it here closes that at the source; INV-22
+        # additionally reds if any `run:` step in this job drops the declaration.
+        shell: bash
         env:
           OWN_TOKEN: ${{ github.token }}
+          # INV-22-DELTA record-source
+          RECORD_REPO: CodeRoasted/coderoast
           RECORD_TOKEN: ${{ secrets.BUILD_RECORD_READ_TOKEN }}
+          # INV-22-DELTA-END record-source
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
           DISPATCHED_FROM: ${{ github.sha }}
         run: |
           set -euo pipefail
-          RECORD_REPO="CodeRoasted/coderoast"
           PACKAGE="${REPO#*/}"
           version="${TAG#v}"
           workdir="$RUNNER_TEMP/attest"
@@ -93,13 +152,13 @@ jobs:
             exit 1
           }
           if [ -z "${RECORD_TOKEN:-}" ]; then
-            echo "::error::REFUSED — the secret BUILD_RECORD_READ_TOKEN is empty or is not granted to $REPO, so this job cannot read $RECORD_REPO's build record and cannot establish anything about $TAG. This is a refusal and never a skip. Remedy: grant the organisation secret BUILD_RECORD_READ_TOKEN to $REPO. It must be a fine-grained PAT whose repository access is $RECORD_REPO ALONE, carrying exactly one repository permission: Actions: Read-only."
+            echo "::error::REFUSED — RECORD_TOKEN is empty, so this job cannot read $RECORD_REPO's build record and cannot establish anything about $TAG. This is a refusal and never a skip. In a package repository RECORD_TOKEN is the organisation secret BUILD_RECORD_READ_TOKEN — a fine-grained PAT whose repository access is CodeRoasted/coderoast ALONE, carrying exactly one repository permission, Actions: Read-only — so an empty value means that secret is not granted to $REPO. In the superproject it is that repository's own github.token, which can only be empty if this job's permissions block dropped 'actions: read'."
             exit 1
           fi
 
           # `repos/{repo}/commits/{ref}` takes any ref and returns the COMMIT it resolves to, so an
           # annotated tag is dereferenced here rather than compared as a tag object. Read with this
-          # repository's OWN token: the record token has no access here, by design.
+          # repository's OWN token.
           resolve_rc=0
           TAGGED_SHA="$(GH_TOKEN="$OWN_TOKEN" gh api "repos/$REPO/commits/$TAG" --jq .sha 2>"$workdir/resolve.err")" || resolve_rc=$?
           resolve_err="$(tr '\n' ' ' < "$workdir/resolve.err")"
@@ -117,122 +176,166 @@ jobs:
             echo "::notice::$TAG resolves to $TAGGED_SHA; this run was dispatched from $DISPATCHED_FROM. The attestation below judges the TAG's commit, which is the tree the publish jobs will build from."
           fi
 
-          # The most recent SUCCESSFUL pharos-build runs, newest first. A run is successful only
-          # when EVERY job in it is green — the `build` job AND the gates that are not check
-          # modules and sit beside it — which is what makes a sibling job of `build` part of step 0
-          # exactly as firmly as a check module is (DN-108.D15).
+          # The successful pharos-build runs ON main, newest first. A run is successful only when
+          # EVERY job in it is green — the `build` job AND the gates that are not check modules and
+          # sit beside it — which is what makes a sibling job of `build` part of step 0 exactly as
+          # firmly as a check module is (DN-108.D15).
           runs_rc=0
-          runs="$(GH_TOKEN="$RECORD_TOKEN" gh api -X GET "repos/$RECORD_REPO/actions/workflows/pharos-build.yml/runs" -f status=success -f per_page=50 --jq '.workflow_runs[].id' 2>"$workdir/runs.err")" || runs_rc=$?
+          runs="$(GH_TOKEN="$RECORD_TOKEN" gh api -X GET "repos/$RECORD_REPO/actions/workflows/pharos-build.yml/runs" -f branch=main -f status=success -f per_page=50 --jq '.workflow_runs[].id' 2>"$workdir/runs.err")" || runs_rc=$?
           runs_err="$(tr '\n' ' ' < "$workdir/runs.err")"
           if [ "$runs_rc" -ne 0 ]; then
-            echo "::error::REFUSED — the GitHub API could not list $RECORD_REPO's successful \`pharos-build\` runs, so this job does not know what tree step 0 judged. gh exited $runs_rc and said: $runs_err — that is an authentication, permission, quota or transport fault, NOT an absent build, and it is deliberately not reported as one. The first thing to check is BUILD_RECORD_READ_TOKEN: it needs Actions: Read-only on $RECORD_REPO and must be granted to $REPO. Nothing about $TAG has been established either way."
+            echo "::error::REFUSED — the GitHub API could not list $RECORD_REPO's successful \`pharos-build\` runs on main, so this job does not know what tree step 0 judged. gh exited $runs_rc and said: $runs_err — that is an authentication, permission, quota or transport fault, NOT an absent build, and it is deliberately not reported as one. The first thing to check is the token this job reads the record with: it needs Actions: Read-only on $RECORD_REPO. Nothing about $TAG has been established either way."
             exit 1
           fi
           if [ -z "$runs" ]; then
-            echo "::error::REFUSED — $RECORD_REPO has no successful \`pharos-build\` run at all, so no record exists for $TAG to attest against. A tag cut over a build that never ran is the window DN-108.D7 exists to close. Run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version, then re-tag."
+            echo "::error::REFUSED — $RECORD_REPO has no successful \`pharos-build\` run on main at all, so no record exists for $TAG to attest against. A tag cut over a build that never ran is the window DN-108.D7 exists to close. Run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version, then re-tag."
             exit 1
           fi
 
-          : > "$workdir/candidates.txt"
-          attempted=0
-          downloaded=0
-          last_err="none recorded"
+          cat > "$workdir/judge.py" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path, run_id, version, tagged, tag, package, record_repo, examined, passed_over = sys.argv[1:10]
+
+          PASS_OVER = 3
+
+
+          def refuse(message):
+              print("::error::REFUSED — " + message)
+              raise SystemExit(1)
+
+
+          try:
+              record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+          except (OSError, ValueError) as exc:
+              refuse(f"the build record downloaded from {record_repo} run {run_id} is not readable "
+                     f"({exc}). An unreadable record is not a record, and it is deliberately NOT skipped "
+                     f"in favour of an older run: a corrupt or truncated artifact on a run NEWER than the "
+                     f"one that would be chosen is exactly the case where quietly attesting against a "
+                     f"previous build would be wrong. Re-run .github/workflows/pharos-build.yml in "
+                     f"{record_repo} with version={version}.")
+          if not isinstance(record, dict):
+              refuse(f"the build record from {record_repo} run {run_id} parsed as "
+                     f"{type(record).__name__}, not an object, so it carries no `version`, no `built` and "
+                     f"no `repos`. That is a broken record, not a clean attestation, and it is not skipped "
+                     f"in favour of an older run. Re-run step 0 in {record_repo}.")
+
+          carried = record.get("version")
+          if carried != version:
+              print(f"{record_repo} run {run_id} carries a record for a version other than {version} "
+                    f"— READ and passed over. Which version it carries is deliberately not printed: this "
+                    f"log is public in three of the repositories that run this step, and the set of "
+                    f"versions in recent build records is the unreleased version roadmap. Only a record "
+                    f"that cannot be READ ends this job; one that names another cut is simply not this "
+                    f"cut's record.")
+              raise SystemExit(PASS_OVER)
+
+          print(f"attesting against the record of {record_repo} pharos-build run {run_id} "
+                f"(version {version})")
+
+          # `is True`, never truthiness: the strings "false" and "no" are both truthy, so a record whose
+          # `built` arrived as text would have attested green on a build that failed.
+          if record.get("built") is not True or record.get("cuttable") is not True:
+              refuse(f"the build record for {version} says built={record.get('built')!r}, "
+                     f"cuttable={record.get('cuttable')!r}. Step 0 writes its record on EVERY path, so the "
+                     f"existence of a record is not a pass: only a build that is BOTH built and cuttable — "
+                     f"both the JSON literal `true` — attests (DN-108.D14). Read the failing stage in the "
+                     f"record and re-run step 0 in {record_repo}.")
+
+          repos = record.get("repos")
+          if not isinstance(repos, dict):
+              refuse(f"the build record for {version} carries no `repos` object, so it names no SHA for "
+                     f"anything and there is nothing to compare {tag} against. That is a broken record, "
+                     f"not a clean attestation.")
+
+          # BOTH SHAPES, AND AN UNRECOGNISED ONE REFUSES. The record states the repositories it did NOT
+          # judge so that it never implies a coverage it does not have (DN-108.D15); a guard that reads
+          # only the mapping form would silently ignore the same statement written as a list, which is
+          # the one direction where being wrong means tagging off a record that disclaims this repository.
+          unjudged = record.get("repos_unjudged")
+          reason = None
+          if unjudged is None or unjudged == {} or unjudged == []:
+              reason = None
+          elif isinstance(unjudged, dict):
+              reason = unjudged.get(package)
+          elif isinstance(unjudged, list) and all(isinstance(entry, str) for entry in unjudged):
+              reason = "no reason recorded — the record states its unjudged set as a list" \
+                  if package in unjudged else None
+          else:
+              refuse(f"the build record for {version} carries a `repos_unjudged` of type "
+                     f"{type(unjudged).__name__} that this job does not recognise (it reads a name->reason "
+                     f"object or a list of names). It therefore cannot tell whether {package} is inside the "
+                     f"build's declared scope, and it does not guess. Fix the record's shape in "
+                     f"{record_repo} and re-run step 0.")
+          if reason is not None:
+              refuse(f"the build record for {version} states that it did NOT judge {package}: "
+                     f"\"{reason}\". The record naming its own scope is what stops it implying a coverage "
+                     f"it does not have, and the honest consequence is that {package} cannot be tagged off "
+                     f"it. Put {package} inside step 0 in {record_repo} and re-run it.")
+
+          verified = repos.get(package)
+          if not verified:
+              refuse(f"the build record for {version} names no SHA for this repository "
+                     f"(`repos.{package}`), so there is nothing to compare {tag} against. The record "
+                     f"judged: {', '.join(sorted(repos))}. That is a broken record or a build that never "
+                     f"saw this repository, not a clean attestation.")
+          if verified != tagged:
+              refuse(f"the tag {tag} points at {tagged} and the build record for {version} verified "
+                     f"{package} at {verified}. This repository moved after step 0, so the tag would "
+                     f"publish over a tree the build never judged. Both SHAs above are {package}'s: "
+                     f"{tagged} is what {tag} resolves to today, never the commit this run was dispatched "
+                     f"from. Re-run .github/workflows/pharos-build.yml in {record_repo} with "
+                     f"version={version}, then re-tag.")
+
+          print(f"attested: the tag {tag} and {record_repo}'s build record for {version} agree that "
+                f"{package} is {tagged}")
+          print(f"  candidates: {examined} successful pharos-build run(s) on main examined, newest first; "
+                f"{passed_over} passed over as records for another version; 0 unreadable. An unreadable "
+                f"candidate newer than the chosen one is a refusal, never a substitution, so this line "
+                f"reading 0 is part of the attestation and not decoration.")
+          PY
+
+          # NEWEST FIRST, AND THE FIRST READABLE RECORD FOR THIS VERSION WINS. `judge.py` exits 0
+          # when it has attested, 3 when the record it read belongs to another cut, and 1 with an
+          # `::error::` for every other outcome — so a candidate that cannot be read stops the job
+          # here rather than promoting its predecessor.
+          examined=0
+          passed_over=0
+          chosen=""
           for id in $runs; do
-            attempted=$((attempted + 1))
+            examined=$((examined + 1))
             dest="$workdir/cand/$id"
             rm -rf "$dest"; mkdir -p "$dest"
             if ! GH_TOKEN="$RECORD_TOKEN" gh run download "$id" --repo "$RECORD_REPO" --name pharos-build-record --dir "$dest" >/dev/null 2>"$workdir/dl.err"; then
-              last_err="run $id: $(tr '\n' ' ' < "$workdir/dl.err")"
-              rm -rf "$dest"
-              continue
+              echo "::error::REFUSED — the \`pharos-build-record\` artifact of $RECORD_REPO run $id could not be downloaded. It is candidate $examined of the newest-first list and $passed_over earlier candidate(s) were read and passed over as other cuts' records, so every record that could still have described $TAG is either this one or older than it. gh said: $(tr '\n' ' ' < "$workdir/dl.err"). This job does not fall through to an older run: the unread record may be the one that describes $TAG, and attesting against its predecessor would certify a tree step 0 has since re-judged. TWO CAUSES FAIL IDENTICALLY IN gh's EXIT CODE and both are named rather than one of them guessed at — a run artifact past its 90-day retention has been DELETED, and a token without Actions: Read-only on $RECORD_REPO is REFUSED the download. If the artifact has merely expired, re-run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version and re-tag."
+              exit 1
             fi
             if [ ! -f "$dest/preflight.json" ]; then
-              last_err="run $id: the artifact pharos-build-record downloaded but carries no preflight.json"
-              rm -rf "$dest"
-              continue
+              echo "::error::REFUSED — the \`pharos-build-record\` artifact of $RECORD_REPO run $id downloaded but carries no preflight.json. It is candidate $examined of the newest-first list and $passed_over earlier candidate(s) were read and passed over as other cuts' records, so every record that could still have described $TAG is either this one or older than it. An artifact without the record is not a record, and it is not skipped in favour of an older run. Re-run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version."
+              exit 1
             fi
-            downloaded=$((downloaded + 1))
-            printf '%s\n' "$id" >> "$workdir/candidates.txt"
+            judge_rc=0
+            python3 "$workdir/judge.py" "$dest/preflight.json" "$id" "$version" "$TAGGED_SHA" "$TAG" "$PACKAGE" "$RECORD_REPO" "$examined" "$passed_over" || judge_rc=$?
+            if [ "$judge_rc" -eq 0 ]; then
+              chosen="$id"
+              break
+            fi
+            if [ "$judge_rc" -ne 3 ]; then
+              exit "$judge_rc"
+            fi
+            passed_over=$((passed_over + 1))
+            rm -rf "$dest"
           done
-          if [ "$downloaded" -eq 0 ]; then
-            echo "::error::REFUSED — not one of the $attempted most recent successful \`pharos-build\` runs in $RECORD_REPO yielded a usable \`pharos-build-record\` artifact, so no record was read and nothing about $TAG is established. The last failure was: $last_err. TWO CAUSES FAIL IDENTICALLY IN gh's EXIT CODE and both are named rather than one of them guessed at: a run artifact past its 90-day retention has been DELETED, and a token without Actions: Read-only on $RECORD_REPO is REFUSED the download. Check BUILD_RECORD_READ_TOKEN first; if the artifacts have merely expired, re-run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version."
+          if [ -z "$chosen" ]; then
+            echo "::error::REFUSED — none of the $examined successful \`pharos-build\` run(s) on main in $RECORD_REPO carries a record for version $version; every one of them was read and every one names another cut. A tag cut over a build that never saw its version is the window DN-108.D7 exists to close. The versions those records DO carry are deliberately not listed here: this log is public in three of the repositories that run this step, and the set of versions in recent build records is the unreleased version roadmap. Run .github/workflows/pharos-build.yml in $RECORD_REPO with version=$version, then re-tag."
             exit 1
           fi
-
-          python3 - "$workdir" "$version" "$TAGGED_SHA" "$TAG" "$PACKAGE" "$RECORD_REPO" <<'PY'
-          import json, pathlib, sys
-          workdir, version, tagged, tag, package, record_repo = sys.argv[1:7]
-          base = pathlib.Path(workdir)
-          ids = (base / "candidates.txt").read_text(encoding="utf-8").split()
-          chosen = None
-          for run_id in ids:
-              path = base / "cand" / run_id / "preflight.json"
-              try:
-                  record = json.loads(path.read_text(encoding="utf-8"))
-              except (OSError, ValueError) as exc:
-                  sys.exit(f"::error::REFUSED — the build record downloaded from {record_repo} "
-                           f"run {run_id} is not readable JSON ({exc}). An unparseable record is "
-                           f"not a record. It is deliberately NOT skipped in favour of an older "
-                           f"run: a corrupt artifact on the NEWEST build is exactly the case "
-                           f"where quietly attesting against a previous one would be wrong. "
-                           f"Re-run .github/workflows/pharos-build.yml in {record_repo} with "
-                           f"version={version}.")
-              if not isinstance(record, dict):
-                  sys.exit(f"::error::REFUSED — the build record from {record_repo} run {run_id} "
-                           f"parsed as {type(record).__name__}, not an object, so it carries no "
-                           f"`version`, no `built` and no `repos`. That is a broken record, not a "
-                           f"clean attestation. Re-run step 0 in {record_repo}.")
-              if record.get("version") == version:
-                  chosen = (run_id, record)
-                  break
-          if chosen is None:
-              sys.exit(f"::error::REFUSED — none of the {len(ids)} readable build records among "
-                       f"{record_repo}'s most recent successful `pharos-build` runs carries "
-                       f"version {version}; they carry "
-                       f"{sorted({json.loads((base / 'cand' / i / 'preflight.json').read_text(encoding='utf-8')).get('version') for i in ids})}. "
-                       f"A tag cut over a build that never saw its version is the window "
-                       f"DN-108.D7 exists to close. Run .github/workflows/pharos-build.yml in "
-                       f"{record_repo} with version={version}, then re-tag.")
-          run_id, record = chosen
-          print(f"attesting against the record of {record_repo} pharos-build run {run_id} "
-                f"(version {version})")
-          if not (record.get("built") and record.get("cuttable")):
-              sys.exit(f"::error::REFUSED — the build record for {version} says "
-                       f"built={record.get('built')}, cuttable={record.get('cuttable')}. Step 0 "
-                       f"writes its record on EVERY path, so the existence of a record is not a "
-                       f"pass: only a build that is BOTH built and cuttable attests "
-                       f"(DN-108.D14). Read the failing stage in the record and re-run step 0 in "
-                       f"{record_repo}.")
-          repos = record.get("repos")
-          if not isinstance(repos, dict):
-              sys.exit(f"::error::REFUSED — the build record for {version} carries no `repos` "
-                       f"object, so it names no SHA for anything and there is nothing to compare "
-                       f"{tag} against. That is a broken record, not a clean attestation.")
-          unjudged = record.get("repos_unjudged")
-          if isinstance(unjudged, dict) and package in unjudged:
-              sys.exit(f"::error::REFUSED — the build record for {version} states that it did NOT "
-                       f"judge {package}: \"{unjudged[package]}\". The record naming its own scope "
-                       f"is what stops it implying a coverage it does not have, and the honest "
-                       f"consequence is that {package} cannot be tagged off it. Put {package} "
-                       f"inside step 0 in {record_repo} and re-run it.")
-          verified = repos.get(package)
-          if not verified:
-              sys.exit(f"::error::REFUSED — the build record for {version} names no SHA for this "
-                       f"repository (`repos.{package}`), so there is nothing to compare {tag} "
-                       f"against. The record judged: {', '.join(sorted(repos))}. That is a broken "
-                       f"record or a build that never saw this repository, not a clean "
-                       f"attestation.")
-          if verified != tagged:
-              sys.exit(f"::error::REFUSED — the tag {tag} points at {tagged} and the build record "
-                       f"for {version} verified {package} at {verified}. This repository moved "
-                       f"after step 0, so the tag would publish over a tree the build never "
-                       f"judged. Both SHAs above are {package}'s: {tagged} is what {tag} resolves "
-                       f"to today, never the commit this run was dispatched from. Re-run "
-                       f".github/workflows/pharos-build.yml in {record_repo} with "
-                       f"version={version}, then re-tag.")
-          print(f"attested: the tag {tag} and {record_repo}'s build record for {version} agree "
-                f"that {package} is {tagged}")
-          PY
+          # INV-22-DELTA record-copy
+          # INV-22-DELTA-END record-copy
+      # INV-22-DELTA release-step
+      # INV-22-DELTA-END release-step
 
   lint:
     needs: attest
