@@ -170,7 +170,7 @@ jobs:
           TAGGED_SHA="$(GH_TOKEN="$OWN_TOKEN" gh api "repos/$REPO/commits/$TAG" --jq .sha 2>"$workdir/resolve.err")" || resolve_rc=$?
           resolve_err="$(tr '\n' ' ' < "$workdir/resolve.err")"
           if [ "$resolve_rc" -ne 0 ] || [ -z "$TAGGED_SHA" ]; then
-            if [ "$resolve_rc" -ne 0 ] && printf '%s' "$resolve_err" | grep -q 'HTTP 404'; then
+            if [ "$resolve_rc" -ne 0 ] && grep -q 'HTTP 404' <<<"$resolve_err"; then
               echo "::error::REFUSED — the ref $TAG does not exist in $REPO (the API answered HTTP 404), so there is nothing to attest. It is NOT attested against the dispatching commit ($DISPATCHED_FROM) instead: that is a different tree, and a record about it says nothing about $TAG. Push the tag first, or dispatch with a tag that exists."
             elif [ "$resolve_rc" -ne 0 ]; then
               echo "::error::REFUSED — the GitHub API could not answer whether $TAG exists in $REPO, so this job does not know what tree it would be attesting. gh exited $resolve_rc and said: $resolve_err — that is an authentication, permission, quota or transport fault, NOT a missing tag, and the tag is deliberately not blamed for it. Fix the API access and re-run; nothing about $TAG has been established either way."
