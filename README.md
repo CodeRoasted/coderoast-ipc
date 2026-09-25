@@ -145,6 +145,9 @@ no acquire/commit slot-borrow API — the same shape is exercised in
   header through a descriptor and unlinks a segment only when its owner is absent from this pid
   namespace or runs with another start time. A live owner, another pid namespace, a foreign file or
   another ABI version is kept. Call it once at a producer process's start; `create()` never reaps.
+  A googletest executable does so by calling `coderoast_ipc_reap_orphaned_segments_at_start(<target>)`,
+  which the package's CMake config defines: it compiles a global test environment into that target,
+  never into the library, and the environment prints one line per segment it removes and a count.
 - **A full tmpfs refuses the create.** `create()` reserves the segment's bytes with
   `posix_fallocate` before mapping it, so a tmpfs that cannot hold it throws a `std::runtime_error`
   naming the channel, the bytes and the errno, and leaves no name, instead of killing the process

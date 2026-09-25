@@ -96,6 +96,8 @@ if(CODEROAST_IPC_CONSUMER_BUILD_TESTS)
         target_compile_features(coderoast_ipc_consumer_tests PRIVATE cxx_std_23)
         set_target_properties(coderoast_ipc_consumer_tests PROPERTIES
             CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+        # DN-102.D2: the tests create shared-memory channels, so the binary reaps orphans at start.
+        coderoast_ipc_reap_orphaned_segments_at_start(coderoast_ipc_consumer_tests)
         include(GoogleTest)
         gtest_discover_tests(coderoast_ipc_consumer_tests)
     endif()
