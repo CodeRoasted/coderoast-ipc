@@ -2,7 +2,6 @@
 // invariant: every name here carries this process's id, so no arm opens, reserves or removes a
 // segment another process created.
 #include <fcntl.h>
-#include <sched.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
@@ -14,6 +13,8 @@
 #include <gtest/gtest.h>
 
 import coderoast.ipc.core.test;
+
+#include "private_pid_namespace.hpp"
 
 namespace
 {
@@ -128,84 +129,54 @@ constexpr int kNamespaceUnavailable{2};
 constexpr int kCreateReturned{3};
 constexpr int kRefusalIncomplete{4};
 constexpr int kNameLeftBehind{5};
-constexpr int kWrongException{6};
 
 constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
 
-// post: whether `text` was written whole to the procfs file at `path`.
-[[nodiscard]] bool write_proc_file(const char* path, std::string_view text) noexcept
+// post: the verdict of a create twice the size of a private /dev/shm of kSmallTmpfsBytes.
+// pre: runs as the first process of a private namespace, whose mounts die with it; the host's
+// /dev/shm is never touched.
+[[nodiscard]] int create_past_a_small_tmpfs()
 {
-    const int descriptor{::open(path, O_WRONLY | O_CLOEXEC)};
-    if (descriptor < 0)
+    if (::mount("tmpfs", "/dev/shm", "tmpfs", 0,
+                std::format("size={}", kSmallTmpfsBytes).c_str()) != 0)
     {
-        return false;
+        std::println(stderr, "[namespace init] no private tmpfs: {}",
+                     std::error_code(errno, std::generic_category()).message());
+        return kNamespaceUnavailable;
     }
-    const auto written{::write(descriptor, text.data(), text.size())};
-    static_cast<void>(::close(descriptor));
-    return written == static_cast<::ssize_t>(text.size());
-}
 
-// post: the child's verdict, after it gave itself a private /dev/shm of kSmallTmpfsBytes in an
-// unprivileged user and mount namespace and asked for a segment twice that size.
-// invariant: it runs only in a forked child, which dies with that namespace; the host's /dev/shm
-// is never touched.
-[[nodiscard]] int create_past_a_small_tmpfs() noexcept
-{
+    using Wide = coderoast::ipc::SharedMemorySpscChannel<coderoast::ipc::DefaultLineFrame>;
+    const std::size_t slots{(2U * kSmallTmpfsBytes) / sizeof(coderoast::ipc::DefaultLineFrame)};
+    const auto name{unique_channel("past_tmpfs")};
+    const auto requested{Wide::segment_bytes(slots).value_or(0U)};
     try
     {
-        const auto uid{::getuid()};
-        const auto gid{::getgid()};
-        if (::unshare(CLONE_NEWUSER | CLONE_NEWNS) != 0 ||
-            !write_proc_file("/proc/self/setgroups", "deny") ||
-            !write_proc_file("/proc/self/uid_map", std::format("0 {} 1", uid)) ||
-            !write_proc_file("/proc/self/gid_map", std::format("0 {} 1", gid)) ||
-            ::mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0 ||
-            ::mount("tmpfs", "/dev/shm", "tmpfs", 0,
-                    std::format("size={}", kSmallTmpfsBytes).c_str()) != 0)
-        {
-            std::println(stderr, "[child] no private tmpfs: {}",
-                         std::error_code(errno, std::generic_category()).message());
-            return kNamespaceUnavailable;
-        }
-
-        using Wide = coderoast::ipc::SharedMemorySpscChannel<coderoast::ipc::DefaultLineFrame>;
-        const std::size_t slots{(2U * kSmallTmpfsBytes) / sizeof(coderoast::ipc::DefaultLineFrame)};
-        const auto name{unique_channel("past_tmpfs")};
-        const auto requested{Wide::segment_bytes(slots).value_or(0U)};
-        try
-        {
-            const auto channel{
-                Wide::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = slots})};
-            std::println(stderr, "[child] a {} B create returned over a {} B tmpfs", requested,
-                         kSmallTmpfsBytes);
-            return kCreateReturned;
-        }
-        catch (const std::runtime_error& refusal)
-        {
-            const std::string_view message{refusal.what()};
-            std::println(stderr, "[child] refused: {}", message);
-            const auto no_space{std::make_error_code(std::errc::no_space_on_device).message()};
-            if (!message.contains(name) || !message.contains(std::to_string(requested)) ||
-                !message.contains(no_space))
-            {
-                std::println(stderr,
-                             "[child] the refusal must name the channel '{}', the {} B requested "
-                             "and '{}'",
-                             name, requested, no_space);
-                return kRefusalIncomplete;
-            }
-            if (name_resolves(name))
-            {
-                std::println(stderr, "[child] the refused create left '/{}' behind", name);
-                return kNameLeftBehind;
-            }
-            return kRefusedAndSurvived;
-        }
+        const auto channel{
+            Wide::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = slots})};
+        std::println(stderr, "[namespace init] a {} B create returned over a {} B tmpfs", requested,
+                     kSmallTmpfsBytes);
+        return kCreateReturned;
     }
-    catch (const std::exception& error)
+    catch (const std::runtime_error& refusal)
     {
-        std::println(stderr, "[child] unexpected exception: {}", error.what());
-        return kWrongException;
+        const std::string_view message{refusal.what()};
+        std::println(stderr, "[namespace init] refused: {}", message);
+        const auto no_space{std::make_error_code(std::errc::no_space_on_device).message()};
+        if (!message.contains(name) || !message.contains(std::to_string(requested)) ||
+            !message.contains(no_space))
+        {
+            std::println(stderr,
+                         "[namespace init] the refusal must name the channel '{}', the {} B "
+                         "requested and '{}'",
+                         name, requested, no_space);
+            return kRefusalIncomplete;
+        }
+        if (name_resolves(name))
+        {
+            std::println(stderr, "[namespace init] the refused create left '/{}' behind", name);
+            return kNameLeftBehind;
+        }
+        return kRefusedAndSurvived;
     }
 }
 
@@ -214,29 +185,18 @@ constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
 // refs: DN-102.D3
 TEST(SegmentReservation, ACreateLargerThanTheTmpfsIsRefusedAndTheProcessSurvives)
 {
-    const auto child{::fork()};
-    ASSERT_GE(child, 0) << "fork failed: "
-                        << std::error_code(errno, std::generic_category()).message();
-    if (child == 0)
+    const auto run{coderoast::ipc::testing::run_in_a_private_pid_namespace(
+        [] { return create_past_a_small_tmpfs(); })};
+    if (run.refused || run.exit_code == kNamespaceUnavailable)
     {
-        std::_Exit(create_past_a_small_tmpfs());
+        GTEST_SKIP() << "this host refuses an unprivileged user, pid or mount namespace, so no "
+                        "private tmpfs can be sized; the line above names the errno";
     }
-
-    int status{0};
-    ASSERT_EQ(::waitpid(child, &status, 0), child);
-    if (WIFEXITED(status) && WEXITSTATUS(status) == kNamespaceUnavailable)
-    {
-        GTEST_SKIP() << "this host refuses an unprivileged user and mount namespace, so no private "
-                        "tmpfs can be sized; the child's line above names the errno";
-    }
-    ASSERT_TRUE(WIFEXITED(status))
-        << "the child died by signal " << WTERMSIG(status)
-        << (WTERMSIG(status) == SIGBUS
-                ? " (SIGBUS): the create committed pages its tmpfs could not hold"
-                : "");
-    EXPECT_EQ(WEXITSTATUS(status), kRefusedAndSurvived)
+    EXPECT_EQ(run.exit_code, kRefusedAndSurvived)
         << "exit 3 = the create returned; 4 = the refusal omits the channel, the bytes or the "
-           "errno; 5 = the refused create left its name; 6 = another exception";
+           "errno; 5 = the refused create left its name; 121 = the namespace's first process "
+           "died by the signal named above, SIGBUS if the create committed pages its tmpfs could "
+           "not hold; 122 = another exception";
 }
 
 namespace
@@ -424,10 +384,15 @@ TEST(SegmentReaper, SparesASegmentWhoseOwnerIsAliveInAnotherProcess)
         << "the reaper removed '/" << name << "', whose producer is a live process";
 }
 
-// refs: DN-102.D2
-TEST(SegmentReaper, RemovesASegmentWhoseOwnerDiedWithoutClosingIt)
+namespace
 {
-    const auto name{unique_channel("reap_dead")};
+
+// invariant: set only in the rerun the dead-owner arm starts, to the name its parent minted.
+constexpr const char* kDeadOwnerVariable{"CODEROAST_IPC_DEAD_OWNER_SEGMENT"};
+
+// post: the checks of the dead-owner arm, run inside the private namespace its parent started.
+void judge_a_dead_owner_in_this_namespace(const std::string& name)
+{
     const auto child{::fork()};
     ASSERT_GE(child, 0);
     if (child == 0)
@@ -449,6 +414,11 @@ TEST(SegmentReaper, RemovesASegmentWhoseOwnerDiedWithoutClosingIt)
         << "the child that creates '/" << name << "' did not exit 0";
     ASSERT_TRUE(name_resolves(name)) << "premise: a producer ended by _Exit runs no close";
 
+    ASSERT_TRUE(coderoast::ipc::testing::let_an_outside_reaper_judge(name))
+        << "no reaper outside this namespace served the checkpoint";
+    ASSERT_TRUE(name_resolves(name)) << "a reaper outside this pid namespace removed '/" << name
+                                     << "', whose owner died inside it, before this arm's own reap";
+
     const auto reaped{reap_only(name)};
     ASSERT_TRUE(reaped.has_value());
     EXPECT_EQ(reaped->verdict, SegmentVerdict::Orphaned)
@@ -460,6 +430,52 @@ TEST(SegmentReaper, RemovesASegmentWhoseOwnerDiedWithoutClosingIt)
         ADD_FAILURE() << "'/" << name << "' outlived the reaper though its owner is dead";
         Channel::unlink(name);
     }
+}
+
+} // namespace
+
+// refs: DN-102.D2
+// invariant: the owner lives and dies in a private pid namespace, so a reaper any other process
+// starts on the host judges the segment Unknown and cannot remove it before this arm's own reap.
+// invariant: the checkpoint runs one such reaper between the owner's death and that reap.
+TEST(SegmentReaper, RemovesASegmentWhoseOwnerDiedWithoutClosingIt)
+{
+    if (coderoast::ipc::testing::in_a_private_pid_namespace_rerun())
+    {
+        const char* name{std::getenv(kDeadOwnerVariable)};
+        ASSERT_NE(name, nullptr) << kDeadOwnerVariable << " is unset in the rerun";
+        judge_a_dead_owner_in_this_namespace(name);
+        return;
+    }
+
+    const auto name{unique_channel("reap_dead")};
+    const auto run{coderoast::ipc::testing::rerun_this_test_in_a_private_pid_namespace(
+        {{kDeadOwnerVariable, name}})};
+    // note: a segment the rerun left is Unknown to every reaper once its namespace is gone.
+    if (name_resolves(name))
+    {
+        Channel::unlink(name);
+    }
+    if (run.refused)
+    {
+        GTEST_SKIP() << "this host refuses an unprivileged user, pid or mount namespace, so the "
+                        "dead owner cannot be isolated from the host's other reapers; the line "
+                        "above names the errno";
+    }
+    EXPECT_EQ(run.exit_code, 0) << "the rerun in the private namespace failed; its output is above";
+    ASSERT_EQ(run.outside_reaps.size(), 1U)
+        << "the rerun asked a reaper outside its namespace to judge " << run.outside_reaps.size()
+        << " time(s); the arm asks once, between its owner's death and its own reap";
+    const auto& outside{run.outside_reaps.front()};
+    ASSERT_EQ(outside.segments.size(), 1U)
+        << "the outside reaper listed " << outside.segments.size() << " entries under '" << name
+        << "'; the owner's death leaves exactly that one segment";
+    EXPECT_EQ(outside.segments.front().verdict, SegmentVerdict::Unknown)
+        << "a reaper outside the namespace judged '/" << name << "' "
+        << verdict_name(outside.segments.front().verdict)
+        << "; an owner recorded in another pid namespace is Unknown to it";
+    EXPECT_FALSE(outside.segments.front().removed)
+        << "a reaper outside the namespace removed '/" << name << "' while the arm held it";
 }
 
 // refs: DN-102.D2
@@ -516,85 +532,15 @@ constexpr int kStartReportMissing{4};
 constexpr int kStartOrphanRemained{5};
 constexpr int kStartLiveRemoved{6};
 constexpr int kStartRunFailed{7};
-constexpr int kStartInitDied{8};
-constexpr int kStartThrew{9};
-constexpr int kExecFailed{127};
-
-constexpr std::size_t kOutputChunkBytes{4096U};
-
-struct ExecutableRun
-{
-    std::string output;
-    int status{-1};
-    bool started{false};
-};
-
-// post: this executable run again on `filter` alone, the two names in its environment, with its
-// stdout and stderr captured together.
-[[nodiscard]] ExecutableRun run_this_executable(const std::string& filter,
-                                                const std::string& orphan, const std::string& live)
-{
-    std::array<int, 2> output{-1, -1};
-    if (::pipe(output.data()) != 0)
-    {
-        return {};
-    }
-    const auto child{::fork()};
-    if (child == 0)
-    {
-        static_cast<void>(::dup2(output[1], STDOUT_FILENO));
-        static_cast<void>(::dup2(output[1], STDERR_FILENO));
-        static_cast<void>(::close(output[0]));
-        static_cast<void>(::close(output[1]));
-        std::string executable{"/proc/self/exe"};
-        std::string filter_flag{"--gtest_filter=" + filter};
-        std::array<char*, 3> arguments{executable.data(), filter_flag.data(), nullptr};
-        if (::setenv(kStartOrphanVariable, orphan.c_str(), 1) == 0 &&
-            ::setenv(kStartLiveVariable, live.c_str(), 1) == 0)
-        {
-            static_cast<void>(::execv(executable.c_str(), arguments.data()));
-        }
-        std::_Exit(kExecFailed);
-    }
-    static_cast<void>(::close(output[1]));
-    ExecutableRun run{.started = child > 0};
-    std::array<char, kOutputChunkBytes> chunk{};
-    while (run.started)
-    {
-        const auto received{::read(output[0], chunk.data(), chunk.size())};
-        if (received > 0)
-        {
-            run.output.append(chunk.data(), static_cast<std::size_t>(received));
-        }
-        else if (received == 0 || errno != EINTR)
-        {
-            break;
-        }
-    }
-    static_cast<void>(::close(output[0]));
-    if (run.started && ::waitpid(child, &run.status, 0) != child)
-    {
-        run.started = false;
-    }
-    return run;
-}
 
 // post: the verdict of one run of this executable over a segment whose owner exited before the run
 // started and one this process keeps alive through it.
-// invariant: it runs as the first process of a private pid namespace with its own /proc, so every
-// other reaper on the host judges both segments Unknown and never removes them first.
+// pre: runs as the first process of a private pid namespace, so every other reaper on the host
+// judges both segments Unknown and never removes them first.
 [[nodiscard]] int judge_a_start_in_this_namespace(const std::string& orphan,
                                                   const std::string& live,
                                                   const std::string& filter)
 {
-    if (::mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0 ||
-        ::mount("proc", "/proc", "proc", 0, nullptr) != 0)
-    {
-        std::println(stderr, "[namespace init] no private /proc: {}",
-                     std::error_code(errno, std::generic_category()).message());
-        return kNamespaceUnavailable;
-    }
-
     const auto creator{::fork()};
     if (creator == 0)
     {
@@ -620,7 +566,8 @@ struct ExecutableRun
 
     const auto live_producer{
         Channel::create(coderoast::ipc::ChannelConfig{.name = live, .slot_count = 4U})};
-    const auto run{run_this_executable(filter, orphan, live)};
+    const auto run{coderoast::ipc::testing::run_this_executable(
+        filter, {{kStartOrphanVariable, orphan}, {kStartLiveVariable, live}})};
     const bool reported{run.output.contains("segment reaper: removed /dev/shm/" + orphan + ",")};
     const bool orphan_gone{!name_resolves(orphan)};
     const bool live_kept{name_resolves(live)};
@@ -649,54 +596,6 @@ struct ExecutableRun
     return run_passed ? kStartReaperHeld : kStartRunFailed;
 }
 
-// post: the verdict of judge_a_start_in_this_namespace, run from a new user, pid and mount
-// namespace; kNamespaceUnavailable when the host refuses one.
-[[nodiscard]] int judge_a_start_in_a_private_pid_namespace(const std::string& orphan,
-                                                           const std::string& live,
-                                                           const std::string& filter) noexcept
-{
-    try
-    {
-        const auto uid{::getuid()};
-        const auto gid{::getgid()};
-        if (::unshare(CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS) != 0 ||
-            !write_proc_file("/proc/self/setgroups", "deny") ||
-            !write_proc_file("/proc/self/uid_map", std::format("0 {} 1", uid)) ||
-            !write_proc_file("/proc/self/gid_map", std::format("0 {} 1", gid)))
-        {
-            std::println(stderr, "[child] no private pid namespace: {}",
-                         std::error_code(errno, std::generic_category()).message());
-            return kNamespaceUnavailable;
-        }
-        const auto init{::fork()};
-        if (init == 0)
-        {
-            try
-            {
-                std::_Exit(judge_a_start_in_this_namespace(orphan, live, filter));
-            }
-            catch (const std::exception& error)
-            {
-                std::println(stderr, "[namespace init] unexpected exception: {}", error.what());
-                std::_Exit(kStartThrew);
-            }
-        }
-        int status{0};
-        if (init < 0 || ::waitpid(init, &status, 0) != init || !WIFEXITED(status))
-        {
-            std::println(stderr,
-                         "[child] the namespace's first process ended without an exit code");
-            return kStartInitDied;
-        }
-        return WEXITSTATUS(status);
-    }
-    catch (const std::exception& error)
-    {
-        std::println(stderr, "[child] unexpected exception: {}", error.what());
-        return kStartThrew;
-    }
-}
-
 } // namespace
 
 // refs: DN-102.D2
@@ -723,15 +622,9 @@ TEST(SegmentReaper, TheExecutableRemovesAnOrphanAndKeepsALiveSegmentAtItsStart)
     const auto live{unique_channel("start_live")};
     const auto* const current{::testing::UnitTest::GetInstance()->current_test_info()};
     const std::string filter{std::string{current->test_suite_name()} + "." + current->name()};
-    const auto child{::fork()};
-    ASSERT_GE(child, 0) << "fork failed: "
-                        << std::error_code(errno, std::generic_category()).message();
-    if (child == 0)
-    {
-        std::_Exit(judge_a_start_in_a_private_pid_namespace(orphan, live, filter));
-    }
-    int status{0};
-    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    const auto run{coderoast::ipc::testing::run_in_a_private_pid_namespace(
+        [&orphan, &live, &filter]
+        { return judge_a_start_in_this_namespace(orphan, live, filter); })};
     for (const auto& name : {orphan, live})
     {
         if (name_resolves(name))
@@ -740,18 +633,16 @@ TEST(SegmentReaper, TheExecutableRemovesAnOrphanAndKeepsALiveSegmentAtItsStart)
         }
     }
 
-    if (WIFEXITED(status) && WEXITSTATUS(status) == kNamespaceUnavailable)
+    if (run.refused)
     {
         GTEST_SKIP() << "this host refuses an unprivileged user, pid or mount namespace, so no "
-                        "start can be isolated from the host's other reapers; the child's line "
-                        "above names the errno";
+                        "start can be isolated from the host's other reapers; the line above "
+                        "names the errno";
     }
-    ASSERT_TRUE(WIFEXITED(status)) << "the child died by signal " << WTERMSIG(status);
-    const int verdict{WEXITSTATUS(status)};
-    EXPECT_EQ(verdict, kStartReaperHeld)
+    EXPECT_EQ(run.exit_code, kStartReaperHeld)
         << "exit 3 = no orphan could be planted; 4 = the run printed no removal of '/" << orphan
         << "', so its start reaped nothing; 5 = that segment outlived the run; 6 = the run removed "
            "'/"
-        << live << "', whose owner lives; 7 = the run itself failed; 8 = the namespace's first "
-        << "process died; 9 = an exception; the lines above give the run's output";
+        << live << "', whose owner lives; 7 = the run itself failed; 121 = the namespace's first "
+        << "process died; 122 = an exception; the lines above give the run's output";
 }

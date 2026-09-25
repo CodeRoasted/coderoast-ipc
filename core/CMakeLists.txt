@@ -77,10 +77,10 @@ install(EXPORT coderoast_ipc_coreTargets
 # package's OWN cmake config (carrying the file set), conan defers via
 # cmake_find_mode=none. create → install(EXPORT); editable → BUILD-TREE export().
 # core is header-only/std-only → the config has NO find_dependency() lines.
-# Both configs also define coderoast_ipc_reap_orphaned_segments_at_start (tests/support/,
-# DN-102.D2): the build-tree config includes it from the source tree, so an editable consumer
-# compiles the unit as written; the installed one from beside itself, where install() ships the
-# helper and its unit.
+# Both configs also define the test and benchmark support functions of tests/support/
+# (DN-102.D2): the build-tree config includes them from the source tree, so an editable consumer
+# compiles the units as written; the installed one from beside itself, where install() ships the
+# functions, their units and their headers.
 export(EXPORT coderoast_ipc_coreTargets
     NAMESPACE coderoast::ipc::
     FILE ${CMAKE_CURRENT_BINARY_DIR}/coderoast_ipc_coreTargets.cmake)
@@ -94,7 +94,11 @@ include(\"\${CMAKE_CURRENT_LIST_DIR}/coderoast_ipc_core_testing.cmake\")
 ")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/install/coderoast_ipc_core-config.cmake
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/coderoast_ipc_core_testing.cmake
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/reap_orphaned_segments_at_start.hpp
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/reap_orphaned_segments_at_start.cpp
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/reap_orphaned_segments_at_start_environment.cpp
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/private_pid_namespace.hpp
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/private_pid_namespace.cpp
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core)
 
 ###########################################################
@@ -128,20 +132,15 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
             CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
         include(${CMAKE_CURRENT_SOURCE_DIR}/tests/support/coderoast_ipc_core_testing.cmake)
         coderoast_ipc_reap_orphaned_segments_at_start(coderoast_ipc_core_tests)
+        coderoast_ipc_private_pid_namespace(coderoast_ipc_core_tests)
         include(GoogleTest)
         # A googletest skip exits 0, so without this property ctest counts a skipped case as
         # PASSED; with it the case is listed under "The following tests did not run". Today that is
-        # SegmentReservation's full-tmpfs arm and SegmentReaper's executable-start arm on a host that
-        # refuses an unprivileged user namespace.
+        # every arm that runs inside a private namespace (the full-tmpfs arm, the executable-start
+        # arm and the dead-owner arm) on a host that refuses an unprivileged user namespace.
         # The regex matches googletest's own skip banner; the two spaces are part of it.
-        # DEAD_OWNER_CASES assert on a segment whose owner is dead on the host's own /dev/shm, which
-        # every other test process of this executable reaps at its start: run in parallel, one of
-        # them could remove it first. RUN_SERIAL keeps them alone.
-        set(DEAD_OWNER_CASES "SegmentReaper.RemovesASegmentWhoseOwnerDiedWithoutClosingIt")
-        gtest_discover_tests(coderoast_ipc_core_tests TEST_FILTER "-${DEAD_OWNER_CASES}"
+        gtest_discover_tests(coderoast_ipc_core_tests
             PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
-        gtest_discover_tests(coderoast_ipc_core_tests TEST_FILTER "${DEAD_OWNER_CASES}"
-            PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]" RUN_SERIAL TRUE)
 
         # (The standalone module-import proof is retired: every unit test now `import`s the
         #  module via the aggregate — the import path is exercised by the whole suite.)
@@ -160,7 +159,8 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
 
         # CONSUMER bench target; no coderoast.ipc.core.bench aggregate manufactured —
         # a single bench TU with a single import (ADR-3.D4's partitions-iff-measured rule). The TU
-        # carries BENCHMARK_MAIN() → link benchmark::benchmark, not benchmark_main.
+        # carries its own main(), which reaps before it runs → link benchmark::benchmark, not
+        # benchmark_main.
         add_executable(coderoast_ipc_core_bench ${BENCH_SOURCES})
         target_link_libraries(coderoast_ipc_core_bench PRIVATE
             coderoast_ipc_core
@@ -169,5 +169,8 @@ if(CODEROAST_IPC_CORE_BUILD_BENCH)
         target_compile_features(coderoast_ipc_core_bench PRIVATE cxx_std_23)
         set_target_properties(coderoast_ipc_core_bench PROPERTIES
             CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
+        # DN-102.D2: the benchmarks create shared-memory channels, so the main reaps orphans first.
+        include(${CMAKE_CURRENT_SOURCE_DIR}/tests/support/coderoast_ipc_core_testing.cmake)
+        coderoast_ipc_reap_orphaned_segments_at_benchmark_start(coderoast_ipc_core_bench)
     endif()
 endif()

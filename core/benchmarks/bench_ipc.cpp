@@ -6,6 +6,8 @@
 import std;
 import coderoast.ipc.core;
 
+#include "reap_orphaned_segments_at_start.hpp"
+
 namespace
 {
 using Frame = coderoast::ipc::LineFrame<256>;
@@ -48,4 +50,18 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
 BENCHMARK(BM_SharedMemoryPushPop)->Arg(1024)->Arg(8192)->Arg(65536);
 } // namespace
 
-BENCHMARK_MAIN();
+// refs: DN-102.D2
+// invariant: the reap runs once the arguments are parsed, so a --help run reaps nothing.
+int main(int argc, char** argv)
+{
+    benchmark::MaybeReenterWithoutASLR(argc, argv);
+    benchmark::Initialize(&argc, argv);
+    if (benchmark::ReportUnrecognizedArguments(argc, argv))
+    {
+        return 1;
+    }
+    coderoast::ipc::testing::reap_orphaned_segments_at_start();
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
+    return 0;
+}

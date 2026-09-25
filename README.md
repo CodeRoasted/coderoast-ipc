@@ -147,7 +147,13 @@ no acquire/commit slot-borrow API — the same shape is exercised in
   another ABI version is kept. Call it once at a producer process's start; `create()` never reaps.
   A googletest executable does so by calling `coderoast_ipc_reap_orphaned_segments_at_start(<target>)`,
   which the package's CMake config defines: it compiles a global test environment into that target,
-  never into the library, and the environment prints one line per segment it removes and a count.
+  never into the library, and the environment prints on stderr one line per segment it removes and
+  a count. A benchmark executable calls `coderoast_ipc_reap_orphaned_segments_at_benchmark_start(<target>)`
+  and has its `main` call `coderoast::ipc::testing::reap_orphaned_segments_at_start()` from
+  `reap_orphaned_segments_at_start.hpp` once its arguments are parsed; the report is the same. A test
+  that must hold a segment whose owner is dead calls `coderoast_ipc_private_pid_namespace(<target>)`
+  and reruns itself through `private_pid_namespace.hpp` inside a private user, pid and mount
+  namespace, where any other process's reaper judges that segment Unknown and keeps it.
 - **A full tmpfs refuses the create.** `create()` reserves the segment's bytes with
   `posix_fallocate` before mapping it, so a tmpfs that cannot hold it throws a `std::runtime_error`
   naming the channel, the bytes and the errno, and leaves no name, instead of killing the process
