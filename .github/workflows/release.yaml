@@ -119,6 +119,13 @@ jobs:
         # the window reopened inside the mechanism that closes it. There is deliberately no
         # fallback to `github.sha`, because the fallback is exactly the bug. Do not "simplify" it.
         #
+        # AND A DISPATCH FROM ANY OTHER COMMIT IS REFUSED, NOT NOTED. Attesting the tag's commit was
+        # half of it: every job that checks out without naming the tag builds the commit the run
+        # was dispatched FROM, and this repository's own `ci.yml`, `golden.yaml` and `lint.yml` name
+        # no ref. So a re-dispatch from `main` after the tag gated `main` and published the tag —
+        # two trees under one attestation. Dispatched ON the tag (`--ref <tag>`), the two are one
+        # commit, and that is the only dispatch this step admits.
+        #
         # TWO TOKENS, AND EACH IS SCOPED TO ONE REPOSITORY. `OWN_TOKEN` resolves THIS repository's
         # tag; `RECORD_TOKEN` reads the build record where it lives. In a package repository those
         # are different repositories, so `RECORD_TOKEN` is `BUILD_RECORD_READ_TOKEN`: a
@@ -180,7 +187,8 @@ jobs:
             exit 1
           fi
           if [ "$TAGGED_SHA" != "$DISPATCHED_FROM" ]; then
-            echo "::notice::$TAG resolves to $TAGGED_SHA; this run was dispatched from $DISPATCHED_FROM. The attestation below judges the TAG's commit, which is the tree the publish jobs will build from."
+            echo "::error::REFUSED — $TAG resolves to $TAGGED_SHA, but this run was dispatched from $DISPATCHED_FROM. The jobs after this one that check out without naming the tag would build and gate $DISPATCHED_FROM while the release publishes $TAG: two trees under one attestation. Dispatch it ON the tag, where the two are one commit: gh workflow run release.yaml --repo $REPO --ref $TAG -f tag=$TAG"
+            exit 1
           fi
 
           # The successful pharos-build runs ON main, NEWEST FIRST — AND THE ORDER IS ESTABLISHED
