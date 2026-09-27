@@ -129,6 +129,7 @@ constexpr int kNamespaceUnavailable{2};
 constexpr int kCreateReturned{3};
 constexpr int kRefusalIncomplete{4};
 constexpr int kNameLeftBehind{5};
+constexpr int kNotAFullTmpfsError{6};
 
 constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
 
@@ -157,18 +158,24 @@ constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
                      kSmallTmpfsBytes);
         return kCreateReturned;
     }
-    catch (const std::runtime_error& refusal)
+    catch (const std::system_error& refusal)
     {
         const std::string_view message{refusal.what()};
         std::println(stderr, "[namespace init] refused: {}", message);
-        const auto no_space{std::make_error_code(std::errc::no_space_on_device).message()};
+        const auto no_space{std::make_error_code(std::errc::no_space_on_device)};
+        if (refusal.code() != no_space)
+        {
+            std::println(stderr, "[namespace init] the refusal carries '{}', not '{}'",
+                         refusal.code().message(), no_space.message());
+            return kNotAFullTmpfsError;
+        }
         if (!message.contains(name) || !message.contains(std::to_string(requested)) ||
-            !message.contains(no_space))
+            !message.contains(no_space.message()))
         {
             std::println(stderr,
                          "[namespace init] the refusal must name the channel '{}', the {} B "
                          "requested and '{}'",
-                         name, requested, no_space);
+                         name, requested, no_space.message());
             return kRefusalIncomplete;
         }
         if (name_resolves(name))
@@ -178,11 +185,80 @@ constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
         }
         return kRefusedAndSurvived;
     }
+    catch (const std::runtime_error& refusal)
+    {
+        std::println(stderr,
+                     "[namespace init] refused by a {} that carries no errno, so no caller can "
+                     "tell a full tmpfs from another failure: {}",
+                     typeid(refusal).name(), refusal.what());
+        return kNotAFullTmpfsError;
+    }
 }
 
 } // namespace
 
-// refs: DN-102.D3
+namespace
+{
+
+constexpr int kCapacityReadAsSized{0};
+constexpr int kCapacityMisread{3};
+constexpr int kFillerRefused{4};
+
+// post: whether shared_memory_capacity reads a private /dev/shm of kSmallTmpfsBytes as that size,
+// with a quarter of it already taken, so a reading of what is free cannot pass.
+// pre: runs as the first process of a private namespace, whose mounts die with it.
+[[nodiscard]] int read_the_capacity_of_a_small_tmpfs()
+{
+    if (::mount("tmpfs", "/dev/shm", "tmpfs", 0,
+                std::format("size={}", kSmallTmpfsBytes).c_str()) != 0)
+    {
+        std::println(stderr, "[namespace init] no private tmpfs: {}",
+                     std::error_code(errno, std::generic_category()).message());
+        return kNamespaceUnavailable;
+    }
+    using Wide = coderoast::ipc::SharedMemorySpscChannel<coderoast::ipc::DefaultLineFrame>;
+    const std::size_t slots{(kSmallTmpfsBytes / 4U) / sizeof(coderoast::ipc::DefaultLineFrame)};
+    try
+    {
+        const auto filler{Wide::create(coderoast::ipc::ChannelConfig{
+            .name = unique_channel("capacity_filler"), .slot_count = slots})};
+        const auto capacity{coderoast::ipc::shared_memory_capacity()};
+        if (capacity != std::optional<std::size_t>{kSmallTmpfsBytes})
+        {
+            std::println(stderr,
+                         "[namespace init] a {} B tmpfs holding a {} B segment read as {} B",
+                         kSmallTmpfsBytes, Wide::segment_bytes(slots).value_or(0U),
+                         capacity.has_value() ? std::to_string(*capacity) : "nothing");
+            return kCapacityMisread;
+        }
+        return kCapacityReadAsSized;
+    }
+    catch (const std::exception& refusal)
+    {
+        std::println(stderr, "[namespace init] the filler segment was refused: {}", refusal.what());
+        return kFillerRefused;
+    }
+}
+
+} // namespace
+
+// refs: DN-103.D20
+TEST(SegmentReservation, TheCapacityIsTheTmpfsSizeNotWhatIsFree)
+{
+    const auto run{coderoast::ipc::testing::run_in_a_private_pid_namespace(
+        [] { return read_the_capacity_of_a_small_tmpfs(); })};
+    if (run.refused || run.exit_code == kNamespaceUnavailable)
+    {
+        GTEST_SKIP() << "this host refuses an unprivileged user, pid or mount namespace, so no "
+                        "private tmpfs can be sized; the line above names the errno";
+    }
+    EXPECT_EQ(run.exit_code, kCapacityReadAsSized)
+        << "exit 3 = the capacity read is not the tmpfs size; 4 = the filler segment was refused; "
+           "121 = the namespace's first process died by the signal named above; 122 = another "
+           "exception";
+}
+
+// refs: DN-102.D3, DN-103.D20
 TEST(SegmentReservation, ACreateLargerThanTheTmpfsIsRefusedAndTheProcessSurvives)
 {
     const auto run{coderoast::ipc::testing::run_in_a_private_pid_namespace(
@@ -194,7 +270,8 @@ TEST(SegmentReservation, ACreateLargerThanTheTmpfsIsRefusedAndTheProcessSurvives
     }
     EXPECT_EQ(run.exit_code, kRefusedAndSurvived)
         << "exit 3 = the create returned; 4 = the refusal omits the channel, the bytes or the "
-           "errno; 5 = the refused create left its name; 121 = the namespace's first process "
+           "errno; 5 = the refused create left its name; 6 = the refusal is not a "
+           "std::system_error carrying ENOSPC; 121 = the namespace's first process "
            "died by the signal named above, SIGBUS if the create committed pages its tmpfs could "
            "not hold; 122 = another exception";
 }

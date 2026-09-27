@@ -216,6 +216,11 @@ struct ReapedSegment
 // is unlinked, and only while its name still resolves to the segment judged.
 [[nodiscard]] std::vector<ReapedSegment> reap_orphaned_segments(std::string_view name_prefix = {});
 
+// refs: DN-103.D20
+// post: the bytes the tmpfs holding every segment can hold, its size and not what is free, read by
+// statvfs; nothing when /dev/shm cannot be read or its size exceeds std::size_t.
+[[nodiscard]] std::optional<std::size_t> shared_memory_capacity() noexcept;
+
 } // namespace coderoast::ipc
 
 // refs: ADR-3.D4
@@ -278,9 +283,11 @@ struct CreatedSegment
 // post: a valid descriptor or a throw — never a negative fd, here and at shm_open_existing.
 [[nodiscard]] CreatedSegment shm_open_create(const char* name);
 [[nodiscard]] int shm_open_existing(const char* name);
-// refs: DN-102.D3
+// refs: DN-102.D3, DN-103.D20
 // post: `size` bytes are reserved for the object, or a throw naming the channel, the bytes and the
 // errno, so a full tmpfs refuses here instead of faulting a later write.
+// post: the throw is a std::system_error carrying the errno, so a caller tells a full tmpfs
+// (ENOSPC) from any other failure.
 void shm_reserve(int descriptor, std::size_t size, const char* channel);
 [[nodiscard]] std::size_t shm_fstat_size(int descriptor);
 [[nodiscard]] void* shm_map(int descriptor, std::size_t size);
@@ -529,8 +536,9 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     // post: a stale segment of the same name is unlinked first.
     // post: from the moment the name exists the handle is its producer, so a throw past that point
     // unlinks it through close(), identity-checked like every close.
-    // refs: DN-102.D3
-    // post: throws std::runtime_error, leaving no name, when the tmpfs cannot reserve the segment.
+    // refs: DN-102.D3, DN-103.D20
+    // post: throws shm_reserve's std::system_error, leaving no name, when the tmpfs cannot reserve
+    // the segment.
     [[nodiscard]] static SharedMemorySpscChannel create(const ChannelConfig& config)
     {
         if (config.slot_count == 0U)

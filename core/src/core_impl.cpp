@@ -7,6 +7,7 @@ module;
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 module coderoast.ipc.core;
@@ -208,9 +209,10 @@ void shm_reserve(int descriptor, std::size_t size, const char* channel)
     }
     if (error_number != 0)
     {
-        throw std::runtime_error(
-            std::format("posix_fallocate of {} B for shared-memory channel '{}' failed: {}", size,
-                        channel, std::error_code(error_number, std::generic_category()).message()));
+        throw std::system_error(
+            std::error_code(error_number, std::generic_category()),
+            std::format("posix_fallocate of {} B for shared-memory channel '{}' failed", size,
+                        channel));
     }
 }
 
@@ -312,6 +314,22 @@ bool shm_unlink_if_identity(const char* name, SegmentIdentity identity) noexcept
                     static_cast<std::uint64_t>(stats.st_ino) == identity.inode};
     (void)::close(descriptor);
     return same && ::shm_unlink(name) == 0;
+}
+
+std::optional<std::size_t> shared_memory_capacity() noexcept
+{
+    struct statvfs stats{};
+    if (::statvfs(kShmDirectory, &stats) != 0)
+    {
+        return std::nullopt;
+    }
+    const auto blocks{static_cast<std::uintmax_t>(stats.f_blocks)};
+    const auto block_bytes{static_cast<std::uintmax_t>(stats.f_frsize)};
+    if (block_bytes != 0U && blocks > std::numeric_limits<std::size_t>::max() / block_bytes)
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(blocks * block_bytes);
 }
 
 } // namespace coderoast::ipc

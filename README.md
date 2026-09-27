@@ -155,9 +155,10 @@ no acquire/commit slot-borrow API — the same shape is exercised in
   and reruns itself through `private_pid_namespace.hpp` inside a private user, pid and mount
   namespace, where any other process's reaper judges that segment Unknown and keeps it.
 - **A full tmpfs refuses the create.** `create()` reserves the segment's bytes with
-  `posix_fallocate` before mapping it, so a tmpfs that cannot hold it throws a `std::runtime_error`
-  naming the channel, the bytes and the errno, and leaves no name, instead of killing the process
-  with `SIGBUS` on the first write.
+  `posix_fallocate` before mapping it, so a tmpfs that cannot hold it throws a `std::system_error`
+  carrying the errno (`ENOSPC` for a full tmpfs) and naming the channel and the bytes, and leaves no
+  name, instead of killing the process with `SIGBUS` on the first write. `shared_memory_capacity()`
+  reads the size of that tmpfs (`statvfs`), which a host admitting segments sizes its ledger by.
 - **`open()` trusts no header size.** It refuses a segment whose header slot count maps any size but
   the segment's own, and it indexes the ring with the slot count it checked, never the live header
   field.
