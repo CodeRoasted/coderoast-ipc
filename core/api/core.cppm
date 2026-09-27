@@ -440,7 +440,7 @@ class AdaptiveWait
 export namespace coderoast::ipc
 {
 
-// refs: DN-99.D3
+// refs: ADR-26.D2
 // invariant: WaitStrategy::Adaptive's paused spin and yields for a caller that owns no channel,
 // then sleeps that double from 1 us to kIdleSleepCeiling instead of Adaptive's flat 1 us.
 // invariant: the tail is this door's alone — a blocked push must resume the moment a slot frees,
