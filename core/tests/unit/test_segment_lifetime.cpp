@@ -1,4 +1,4 @@
-// refs: DN-102.D1, DN-102.D2, DN-102.D3
+// refs: ADR-11.D7, DN-102.D2, DN-102.D3
 // invariant: every name here carries this process's id, so no arm opens, reserves or removes a
 // segment another process created.
 #include <fcntl.h>
@@ -58,7 +58,7 @@ using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
 
 } // namespace
 
-// refs: DN-102.D1
+// refs: ADR-11.D7
 TEST(SegmentLifetime, AClosedProducerLeavesNoNameWhileAnAttachedConsumerStillDrainsToClosed)
 {
     constexpr std::uint64_t kFrames{2U};
@@ -92,7 +92,7 @@ TEST(SegmentLifetime, AClosedProducerLeavesNoNameWhileAnAttachedConsumerStillDra
         << "the attached consumer must read the producer's graceful close after its last frame";
 }
 
-// refs: DN-102.D1
+// refs: ADR-11.D7
 TEST(SegmentLifetime, AProducerWhoseNameWasRecreatedLeavesTheReplacementInPlace)
 {
     constexpr std::size_t kFirstSlots{4U};

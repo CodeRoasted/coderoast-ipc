@@ -152,7 +152,7 @@ struct ChannelConfig
     std::size_t slot_count{kDefaultSharedChannelSlotCount};
     BackpressurePolicy backpressure{BackpressurePolicy::Block};
     WaitStrategy wait_strategy{WaitStrategy::Adaptive};
-    // refs: DN-102.D1
+    // refs: ADR-11.D7
     // invariant: create() unlinks a stale segment of the same name first; the producer handle
     // unlinks the name when it closes, and only while the name still resolves to its own segment.
     bool unlink_before_create{true};
@@ -262,7 +262,7 @@ inline void cpu_pause() noexcept
 
 inline constexpr std::size_t kCacheLineBytes{64U};
 
-// refs: DN-102.D1
+// refs: ADR-11.D7
 // invariant: a segment's identity is its object's (st_dev, st_ino), which no later segment created
 // under the same name shares while this one exists.
 struct SegmentIdentity
@@ -321,7 +321,7 @@ struct SharedChannelHeader
     // all-zero means Unspecified.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
-    // refs: DN-102.D2, DN-102.D4
+    // refs: DN-102.D2, ADR-11.D8
     // invariant: written once at create() and read only by the reaper, so no content, ordering or
     // window-membership surface depends on it.
     SegmentOwner owner{};
@@ -861,7 +861,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         };
     }
 
-    // refs: DN-102.D1
+    // refs: ADR-11.D7
     // post: the mapping and descriptor are released; a producer handle also unlinks its name while
     // that name still resolves to the segment it created, and a consumer handle never unlinks.
     void close() noexcept
