@@ -41,7 +41,7 @@ jobs:
   # statement that nothing had been established. An exclusion is how two copies separate. So the
   # five places where the superproject genuinely differs are FENCED BY NAME, between the
   # `INV-22-DELTA` / `INV-22-DELTA-END` marker comments that every copy carries:
-  #   · `runner`        — the superproject may schedule this on its own runner variable;
+  #   · `runner`        — the superproject schedules this on the release runner (DN-119.D8);
   #   · `permissions`   — it writes Release assets and reads its OWN Actions runs;
   #   · `record-source` — the record lives in the superproject, so that copy reads it with
   #                       `github.token` while a package repository needs a cross-repository PAT;
