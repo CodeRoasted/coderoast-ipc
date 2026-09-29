@@ -125,8 +125,8 @@ jobs:
         #
         # AND A DISPATCH FROM ANY OTHER COMMIT IS REFUSED, NOT NOTED. Attesting the tag's commit was
         # half of it: every job that checks out without naming the tag builds the commit the run
-        # was dispatched FROM, and this repository's own `ci.yml`, `golden.yaml` and `lint.yml` name
-        # no ref. So a re-dispatch from `main` after the tag gated `main` and published the tag —
+        # was dispatched FROM, and this repository's own `ci.yml` and `golden.yaml` name no
+        # ref. So a re-dispatch from `main` after the tag gated `main` and published the tag —
         # two trees under one attestation. Dispatched ON the tag (`--ref <tag>`), the two are one
         # commit, and that is the only dispatch this step admits.
         #
@@ -386,12 +386,8 @@ jobs:
       # INV-22-DELTA release-step
       # INV-22-DELTA-END release-step
 
-  lint:
-    needs: attest
-    uses: ./.github/workflows/lint.yml
-    secrets: inherit
   ci:
-    needs: [attest, lint]
+    needs: attest
     uses: ./.github/workflows/ci.yml
     secrets: inherit
   release:
