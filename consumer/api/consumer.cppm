@@ -17,12 +17,21 @@ struct DrainerMetrics
 
 // invariant: every try_select makes exactly one refill; frontier_blocks counts the selections a
 // lagging shard held back.
+// refs: DN-103.D23
+// invariant: the held_ fields are the raw transport interleave: bounded from above, never asserted
+// equal on a live stream, and never an input to anything.
 struct ReorderMetrics
 {
     std::uint64_t refills{0};
     std::uint64_t selects_attempted{0};
     std::uint64_t selects_succeeded{0};
     std::uint64_t frontier_blocks{0};
+    // note: the frames every per-shard heap holds, now and at the most it ever held.
+    std::uint64_t held_frames{0};
+    std::uint64_t held_frames_peak{0};
+    // note: the heaps' storage, capacity times the frame size; a capacity never shrinks.
+    std::uint64_t held_bytes{0};
+    std::uint64_t held_bytes_peak{0};
 };
 
 // invariant: plain counters, not atomics — the emitter has a single owner thread.
@@ -358,10 +367,12 @@ class CausalReorderBuffer
 
     // post: moves every frame the shards' rings currently hold into the per-shard heaps and raises
     // each shard's watermark to the highest causal KEY it has produced.
+    // post: when a frame moved, the held frames and bytes are republished and each peak raised.
     void refill()
     {
         refills_.fetch_add(1U, std::memory_order_relaxed);
         Frame frame{};
+        bool pulled{false};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
             while (drainer_->try_pull(shard_id, frame))
@@ -371,8 +382,15 @@ class CausalReorderBuffer
                 {
                     shards_[shard_id].watermark = key;
                 }
-                shards_[shard_id].buffer.push(std::move(frame));
+                auto& heap{shards_[shard_id].heap};
+                heap.push_back(std::move(frame));
+                std::ranges::push_heap(heap, Greater{});
+                pulled = true;
             }
+        }
+        if (pulled)
+        {
+            publish_held();
         }
     }
 
@@ -389,12 +407,12 @@ class CausalReorderBuffer
         std::size_t best{kNoIndex};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
-            if (shards_[shard_id].buffer.empty())
+            if (shards_[shard_id].heap.empty())
             {
                 continue;
             }
             if (best == kNoIndex ||
-                causal_less(shards_[shard_id].buffer.top(), shards_[best].buffer.top()))
+                causal_less(shards_[shard_id].heap.front(), shards_[best].heap.front()))
             {
                 best = shard_id;
             }
@@ -421,10 +439,10 @@ class CausalReorderBuffer
                                                    .intra_agent_index = key.intra_agent_index,
                                                    .shard_id = 0U};
                               }};
-        const auto best_key{positional(extract_causal_key(shards_[best].buffer.top()))};
+        const auto best_key{positional(extract_causal_key(shards_[best].heap.front()))};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
-            if (!drainer_->shard_eos(shard_id) && shards_[shard_id].buffer.empty() &&
+            if (!drainer_->shard_eos(shard_id) && shards_[shard_id].heap.empty() &&
                 key_less(positional(shards_[shard_id].watermark), best_key))
             {
                 frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
@@ -433,10 +451,12 @@ class CausalReorderBuffer
             }
         }
 
-        // note: priority_queue::top() is const and the pop right after invalidates the slot.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-        out = std::move(const_cast<Frame&>(shards_[best].buffer.top()));
-        shards_[best].buffer.pop();
+        auto& heap{shards_[best].heap};
+        std::ranges::pop_heap(heap, Greater{});
+        out = std::move(heap.back());
+        heap.pop_back();
+        held_frames_.store(held_frames_.load(std::memory_order_relaxed) - 1U,
+                           std::memory_order_relaxed);
         check_causal_monotonicity(out);
         selects_succeeded_.fetch_add(1U, std::memory_order_relaxed);
         return true;
@@ -451,7 +471,7 @@ class CausalReorderBuffer
             {
                 return false;
             }
-            if (!shards_[shard_id].buffer.empty())
+            if (!shards_[shard_id].heap.empty())
             {
                 return false;
             }
@@ -473,7 +493,7 @@ class CausalReorderBuffer
         {
             out.push_back(ShardSummary{
                 .eos = drainer_->shard_eos(shard_id),
-                .buf_size = shards_[shard_id].buffer.size(),
+                .buf_size = shards_[shard_id].heap.size(),
             });
         }
         return out;
@@ -486,6 +506,10 @@ class CausalReorderBuffer
             .selects_attempted = selects_attempted_.load(std::memory_order_acquire),
             .selects_succeeded = selects_succeeded_.load(std::memory_order_acquire),
             .frontier_blocks = frontier_blocks_.load(std::memory_order_acquire),
+            .held_frames = held_frames_.load(std::memory_order_acquire),
+            .held_frames_peak = held_frames_peak_.load(std::memory_order_acquire),
+            .held_bytes = held_bytes_.load(std::memory_order_acquire),
+            .held_bytes_peak = held_bytes_peak_.load(std::memory_order_acquire),
         };
     }
 
@@ -500,6 +524,30 @@ class CausalReorderBuffer
         if (observer_)
         {
             observer_(ConsumerEventPayload{.event = event, .shard_id = shard_id});
+        }
+    }
+
+    // refs: DN-103.D23
+    // post: the held frames and bytes read off every heap in one pass over the shards, and each
+    // peak raised when passed; this thread is the one writer, so plain stores suffice.
+    void publish_held() noexcept
+    {
+        std::uint64_t frames{0};
+        std::uint64_t bytes{0};
+        for (const ShardState& shard : shards_)
+        {
+            frames += shard.heap.size();
+            bytes += shard.heap.capacity() * sizeof(Frame);
+        }
+        held_frames_.store(frames, std::memory_order_relaxed);
+        held_bytes_.store(bytes, std::memory_order_relaxed);
+        if (frames > held_frames_peak_.load(std::memory_order_relaxed))
+        {
+            held_frames_peak_.store(frames, std::memory_order_relaxed);
+        }
+        if (bytes > held_bytes_peak_.load(std::memory_order_relaxed))
+        {
+            held_bytes_peak_.store(bytes, std::memory_order_relaxed);
         }
     }
 
@@ -549,7 +597,10 @@ class CausalReorderBuffer
 
     struct ShardState
     {
-        std::priority_queue<Frame, std::vector<Frame>, Greater> buffer{};
+        // refs: DN-103.D23
+        // invariant: a min-heap by causal order under Greater, owned as a vector so its storage is
+        // exact: frames are trivially copyable and held in this one allocation.
+        std::vector<Frame> heap{};
         // invariant: per-shard frames are causally non-decreasing, so the highest key pulled
         // bounds the earliest frame that shard can still deliver.
         // note: a tick-grain bound admitted a same-tick lower-agent_order overtake (2026-09-08).
@@ -570,6 +621,10 @@ class CausalReorderBuffer
     std::atomic<std::uint64_t> selects_attempted_{0};
     std::atomic<std::uint64_t> selects_succeeded_{0};
     std::atomic<std::uint64_t> frontier_blocks_{0};
+    std::atomic<std::uint64_t> held_frames_{0};
+    std::atomic<std::uint64_t> held_frames_peak_{0};
+    std::atomic<std::uint64_t> held_bytes_{0};
+    std::atomic<std::uint64_t> held_bytes_peak_{0};
 };
 
 // invariant: single owner thread, no thread and no mutex of its own; two moves per emitted frame

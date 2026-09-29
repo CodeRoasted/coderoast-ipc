@@ -296,3 +296,64 @@ TEST(CausalReorderBuffer, APerShardHeapNeverHoldsMoreThanOneSealIntervalsFrames)
         << "emitted " << emitted << " frames over " << kWindows << " windows, expected "
         << (kWindows * (kFramesPerWindow + 2U)) << " (data frames plus both seals per window)";
 }
+
+// refs: DN-103.D23
+// invariant: the frontier premise pinned: window 0's frames on two busy shards and no seal on the
+// silent one are all held after one refill.
+// invariant: after that seal and the selects none is held, and the bytes stay at the heaps'
+// high-water because a capacity never shrinks.
+// note: exact here because nothing is concurrent; a live stream's held reading is bounded only.
+TEST(ReorderMetrics, HeldFramesAreTheWindowTheSilentShardHoldsBackAndTheBytesAHighWater)
+{
+    constexpr std::uint32_t kFramesPerBusyShard{7};
+    constexpr std::uint64_t kBoundary{100};
+    constexpr std::uint32_t kSilentShard{0};
+    constexpr std::array<std::uint32_t, 2> kBusyShards{1, 2};
+    ProducerHarness producers{"held_reading", 3};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 3}};
+    Buffer buffer{drainer};
+
+    std::uint64_t sequence{0};
+    std::uint64_t pushed{0};
+    for (const std::uint32_t shard : kBusyShards)
+    {
+        for (std::uint32_t index{0}; index < kFramesPerBusyShard; ++index)
+        {
+            (void)producers.producers[shard].push(
+                make_frame(++sequence, shard, "data", 1U + index, shard, index));
+            ++pushed;
+        }
+        (void)producers.producers[shard].push(
+            make_frame(++sequence, shard, "", kBoundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+        ++pushed;
+    }
+    buffer.refill();
+    const auto before_seal{buffer.metrics()};
+    EXPECT_EQ(before_seal.held_frames, pushed)
+        << "held " << before_seal.held_frames << " frames after one refill, pushed " << pushed;
+    EXPECT_EQ(before_seal.held_frames_peak, pushed);
+    EXPECT_GE(before_seal.held_bytes, pushed * sizeof(Frame))
+        << "held bytes " << before_seal.held_bytes << " below " << pushed << " frames of "
+        << sizeof(Frame) << " B";
+
+    Frame out{};
+    EXPECT_FALSE(buffer.try_select(out)) << "the silent shard's missing seal must hold the window";
+    (void)producers.producers[kSilentShard].push(
+        make_frame(++sequence, kSilentShard, "", kBoundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    ++pushed;
+    buffer.refill();
+    const auto sealed{buffer.metrics()};
+    EXPECT_EQ(sealed.held_frames, pushed)
+        << "held " << sealed.held_frames << " frames once the seal landed, pushed " << pushed;
+    std::uint64_t emitted{0};
+    while (buffer.try_select(out))
+        ++emitted;
+    const auto drained{buffer.metrics()};
+    EXPECT_EQ(emitted, pushed) << "emitted " << emitted << ", expected every frame and seal";
+    EXPECT_EQ(drained.held_frames, 0U) << drained.held_frames << " frames still held";
+    EXPECT_EQ(drained.held_frames_peak, pushed);
+    EXPECT_EQ(drained.held_bytes, sealed.held_bytes)
+        << "the bytes moved from " << sealed.held_bytes << " to " << drained.held_bytes
+        << "; a heap's capacity is a high-water and must not shrink";
+    EXPECT_EQ(drained.held_bytes_peak, sealed.held_bytes);
+}
