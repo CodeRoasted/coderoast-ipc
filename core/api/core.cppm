@@ -96,11 +96,83 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) 
 };
 
 inline constexpr std::uint64_t kSharedChannelMagic{0x4352495043535053ULL};
-inline constexpr std::uint32_t kSharedChannelAbiVersion{6U};
+inline constexpr std::uint32_t kSharedChannelAbiVersion{7U};
 inline constexpr std::size_t kDefaultSharedChannelSlotCount{8192U};
 
 // invariant: capacity including the NUL; a longer name is refused at create(), never truncated.
 inline constexpr std::size_t kIntentChannelNameCapacity{32U};
+
+// refs: DN-103.D29
+// invariant: the producer's seal grid: windows of window_length_ns from origin_unix_ns, and the
+// frontier points it publishes its seal horizon at, every frontier_step_ns from the same origin.
+// invariant: both lengths are non-zero on every channel create() admits.
+struct SealGrid
+{
+    std::uint64_t origin_unix_ns{0};
+    std::uint64_t window_length_ns{0};
+    std::uint64_t frontier_step_ns{0};
+
+    [[nodiscard]] bool operator==(const SealGrid&) const = default;
+};
+
+static_assert(std::has_unique_object_representations_v<SealGrid>);
+
+// refs: DN-103.D29
+// pre: grid.window_length_ns and grid.frontier_step_ns are non-zero.
+// post: E(window), the first frontier point at or after the end of `window`: origin + ceil((window
+// + 1) * I / e) * e, in integers; the largest uint64 when that sum does not fit one.
+[[nodiscard]] constexpr std::uint64_t frontier_point_of_window(const SealGrid& grid,
+                                                               std::uint64_t window) noexcept
+{
+    constexpr std::uint64_t kUnbounded{std::numeric_limits<std::uint64_t>::max()};
+    if (window >= kUnbounded / grid.window_length_ns)
+    {
+        return kUnbounded;
+    }
+    const std::uint64_t window_end_offset{(window + 1U) * grid.window_length_ns};
+    const std::uint64_t steps{(window_end_offset / grid.frontier_step_ns) +
+                              (window_end_offset % grid.frontier_step_ns != 0U ? 1U : 0U)};
+    if (steps > kUnbounded / grid.frontier_step_ns)
+    {
+        return kUnbounded;
+    }
+    const std::uint64_t frontier_offset{steps * grid.frontier_step_ns};
+    if (frontier_offset > kUnbounded - grid.origin_unix_ns)
+    {
+        return kUnbounded;
+    }
+    return grid.origin_unix_ns + frontier_offset;
+}
+
+// refs: DN-103.D29
+// pre: grid.window_length_ns and grid.frontier_step_ns are non-zero.
+// post: L, the admission horizon of a merge whose last emitted tick is `anchor_tick`: the frontier
+// point of the window holding max(origin, anchor_tick).
+[[nodiscard]] constexpr std::uint64_t admission_horizon(const SealGrid& grid,
+                                                        std::uint64_t anchor_tick) noexcept
+{
+    const std::uint64_t anchor{std::max(grid.origin_unix_ns, anchor_tick)};
+    return frontier_point_of_window(grid, (anchor - grid.origin_unix_ns) / grid.window_length_ns);
+}
+
+// refs: DN-103.D29
+// pre: grid.window_length_ns and grid.frontier_step_ns are non-zero.
+// post: the lowest window whose frontier point is at or after `tick`, so a frame at `tick` counts
+// toward W⁺ of every window from it through the frame's own.
+// invariant: ceil(x) >= k exactly when x > k - 1, so E(m) >= tick exactly when (m + 1) * I >
+// (k - 1) * e, where k = ceil((tick - origin) / e); a tick at or before the origin opens window 0.
+[[nodiscard]] constexpr std::uint64_t first_window_open_at(const SealGrid& grid,
+                                                           std::uint64_t tick) noexcept
+{
+    if (tick <= grid.origin_unix_ns)
+    {
+        return 0U;
+    }
+    const std::uint64_t offset{tick - grid.origin_unix_ns};
+    const std::uint64_t steps_before{(offset - 1U) / grid.frontier_step_ns};
+    const std::uint64_t closed_offset{steps_before * grid.frontier_step_ns};
+    return closed_offset / grid.window_length_ns;
+}
 
 enum class BackpressurePolicy : std::uint8_t
 {
@@ -160,6 +232,10 @@ struct ChannelConfig
     // invariant: the IntentChannel this ring transports, spelled in full because `name` above is
     // the ring's own name. Empty means the producer declared nothing.
     std::string intent_channel;
+    // refs: DN-103.D29
+    // invariant: required: create() refuses a zero window length or frontier step, so a producer
+    // that omits it declares nothing and is refused.
+    SealGrid seal_grid;
 };
 
 struct ChannelStats
@@ -297,6 +373,14 @@ void shm_unlink_name(const char* name) noexcept;
 // post: `name` is unlinked only if it still resolves to `identity`; true when it was.
 // note: POSIX has no unlink by inode, so a create racing its compare and unlink is undefended.
 bool shm_unlink_if_identity(const char* name, SegmentIdentity identity) noexcept;
+// refs: DN-103.D29
+// invariant: a process-shared futex on a word of a shared mapping, never std::atomic::wait, whose
+// futex is private to the process: a consumer in another process could never wake it.
+// post: returns at once when `word` no longer reads `expected`; otherwise sleeps until a
+// shm_unpark_all on the same word from any process, a signal or a spurious wake.
+void shm_park(const std::atomic<std::uint32_t>& word, std::uint32_t expected) noexcept;
+// post: every thread of every process parked on `word` is woken.
+void shm_unpark_all(std::atomic<std::uint32_t>& word) noexcept;
 
 struct alignas(kCacheLineBytes) Cursor
 {
@@ -320,6 +404,11 @@ struct SharedChannelHeader
     // invariant: channel-level and never per-frame; written once at create(), read once at open();
     // all-zero means Unspecified.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
+
+    // refs: DN-103.D29
+    // invariant: channel-level, written once at create() and read once at open(); the consumer's
+    // admission reads it and no consumer re-derives it.
+    SealGrid seal_grid{};
 
     // refs: DN-102.D2, ADR-11.D8
     // invariant: written once at create() and read only by the reaper, so no content, ordering or
@@ -350,7 +439,14 @@ class AdaptiveWait
     explicit AdaptiveWait(WaitStrategy strategy) noexcept : strategy_{strategy} {}
 
     // pre: `header` may be null; AdaptivePark then sleeps instead of parking on wake_epoch.
-    void wait(SharedChannelHeader* header) noexcept
+    // pre: `still_blocked` re-reads the condition the caller waits out; only AdaptivePark calls it.
+    // refs: DN-103.D29
+    // invariant: a parker registers, then re-reads its condition, then parks on the epoch it read
+    // first; a freeing thread publishes its change, then reads parker_count, and a notifier bumps.
+    // invariant: both sides fence seq_cst between their write and their read, so either the parker
+    // sees the change or the freeing thread sees the parker and bumps the epoch it parks on.
+    template <typename StillBlocked>
+    void wait(SharedChannelHeader* header, StillBlocked still_blocked) noexcept
     {
         ++loops_;
         switch (strategy_)
@@ -394,12 +490,7 @@ class AdaptiveWait
             }
             if (header != nullptr)
             {
-                // invariant: parker_count is raised across the park so a notifier knows a wake is
-                // owed; a spurious wake is safe because the caller's loop re-checks.
-                header->parker_count.fetch_add(1, std::memory_order_acq_rel);
-                const auto epoch{header->wake_epoch.load(std::memory_order_acquire)};
-                header->wake_epoch.wait(epoch, std::memory_order_acquire);
-                header->parker_count.fetch_sub(1, std::memory_order_acq_rel);
+                park(*header, still_blocked);
                 return;
             }
             std::this_thread::sleep_for(std::chrono::microseconds{1});
@@ -431,6 +522,21 @@ class AdaptiveWait
     static constexpr std::uint64_t kSpinLoops{64U};
     static constexpr std::uint64_t kYieldLoops{256U};
 
+    // invariant: parker_count is raised across the park so a freeing thread knows a wake is owed; a
+    // spurious wake is safe because the caller's loop re-checks.
+    template <typename StillBlocked>
+    static void park(SharedChannelHeader& header, StillBlocked& still_blocked) noexcept
+    {
+        header.parker_count.fetch_add(1, std::memory_order_seq_cst);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        const auto epoch{header.wake_epoch.load(std::memory_order_seq_cst)};
+        if (still_blocked())
+        {
+            shm_park(header.wake_epoch, epoch);
+        }
+        header.parker_count.fetch_sub(1, std::memory_order_seq_cst);
+    }
+
     WaitStrategy strategy_;
     std::uint64_t loops_{0};
 };
@@ -456,7 +562,7 @@ class AdaptivePoll
     {
         if (!wait_.past_yield_phase())
         {
-            wait_.wait(nullptr);
+            wait_.wait(nullptr, [] noexcept { return true; });
             return;
         }
         std::this_thread::sleep_for(idle_sleep_);
@@ -561,6 +667,16 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                                         std::to_string(kIntentChannelNameCapacity - 1U) +
                                         " bytes: '" + config.intent_channel + "'");
         }
+        // refs: DN-103.D29
+        // assert: a consumer's admission divides by both lengths, so a channel declaring either as
+        // zero is refused here rather than read as a grid by every consumer.
+        if (config.seal_grid.window_length_ns == 0U || config.seal_grid.frontier_step_ns == 0U)
+        {
+            throw std::invalid_argument(std::format(
+                "IPC channel '{}' declares a seal grid with window length {} ns and "
+                "frontier step {} ns; both must be greater than zero",
+                config.name, config.seal_grid.window_length_ns, config.seal_grid.frontier_step_ns));
+        }
 
         SharedMemorySpscChannel channel;
         channel.name_ = normalise_channel_name(config.name);
@@ -568,6 +684,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         channel.wait_strategy_ = config.wait_strategy;
         channel.map_size_ = *bytes;
         channel.slot_count_ = config.slot_count;
+        channel.seal_grid_ = config.seal_grid;
 
         if (config.unlink_before_create)
         {
@@ -588,6 +705,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         // Unspecified and the copy keeps the NUL (size < capacity, checked above).
         std::memcpy(header->intent_channel.data(), config.intent_channel.data(),
                     config.intent_channel.size());
+        header->seal_grid = config.seal_grid;
         header->owner = current_segment_owner();
         channel.header_ = header;
         channel.validate_header();
@@ -620,7 +738,16 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         // move the ring past the mapping.
         channel.slot_count_ = static_cast<std::size_t>(channel.header_->slot_count);
         channel.validate_header();
+        channel.seal_grid_ = channel.header_->seal_grid;
         return channel;
+    }
+
+    // refs: DN-103.D29
+    // post: the grid the producer declared at create(), as this handle read it once; all zero on a
+    // closed handle.
+    [[nodiscard]] const SealGrid& seal_grid() const noexcept
+    {
+        return seal_grid_;
     }
 
     // refs: ADR-22.D5
@@ -750,7 +877,6 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return PushStatus::Full;
         }
-        notify_progress();
         return PushStatus::Ok;
     }
 
@@ -782,11 +908,11 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                     header_->blocked_events.value.fetch_add(1, std::memory_order_relaxed);
                     header_->wait_loops.value.fetch_add(wait.loops(), std::memory_order_relaxed);
                 }
-                notify_progress();
                 return PushStatus::Ok;
             }
             blocked = true;
-            wait.wait(header_);
+            wait.wait(header_,
+                      [this]() noexcept { return state() == ChannelState::Open && full(); });
         }
     }
 
@@ -802,7 +928,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             std::memcpy(&out, slot_ptr(read), sizeof(Frame));
             header_->read_sequence.value.store(read + 1U, std::memory_order_release);
-            notify_progress();
+            notify_space_freed();
             return PopStatus::Ok;
         }
         const auto _state{state()};
@@ -883,6 +1009,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         fd_ = -1;
         map_size_ = 0U;
         slot_count_ = 0U;
+        seal_grid_ = {};
         identity_ = {};
         is_producer_ = false;
     }
@@ -964,24 +1091,28 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return true;
     }
 
-    // post: bumps wake_epoch only when parker_count is non-zero — one acquire load and a branch
-    // when nobody is parked.
-    void notify_progress() noexcept
+    // refs: DN-103.D29
+    // invariant: only a Block producer parks on a channel, for a free slot, so only a pop owes it a
+    // wake; a push frees nothing and wakes nobody.
+    // post: wakes every parker only when parker_count is non-zero; the seq_cst fence pairs with
+    // AdaptiveWait::park's, so a parker that missed this pop is seen here.
+    void notify_space_freed() noexcept
     {
-        if (header_->parker_count.load(std::memory_order_acquire) == 0U)
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (header_->parker_count.load(std::memory_order_relaxed) == 0U)
         {
             return;
         }
-        header_->wake_epoch.fetch_add(1, std::memory_order_acq_rel);
-        header_->wake_epoch.notify_all();
+        header_->wake_epoch.fetch_add(1, std::memory_order_seq_cst);
+        shm_unpark_all(header_->wake_epoch);
     }
 
     // post: bumps wake_epoch unconditionally, so a parked thread sees the state change on its next
     // iteration.
     void notify_state_change() noexcept
     {
-        header_->wake_epoch.fetch_add(1, std::memory_order_acq_rel);
-        header_->wake_epoch.notify_all();
+        header_->wake_epoch.fetch_add(1, std::memory_order_seq_cst);
+        shm_unpark_all(header_->wake_epoch);
     }
 
     // note: `other` is emptied member by member with std::exchange, never moved whole.
@@ -994,6 +1125,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         header_ = std::exchange(other.header_, nullptr);
         map_size_ = std::exchange(other.map_size_, 0U);
         slot_count_ = std::exchange(other.slot_count_, 0U);
+        seal_grid_ = std::exchange(other.seal_grid_, {});
         policy_ = other.policy_;
         wait_strategy_ = other.wait_strategy_;
         identity_ = std::exchange(other.identity_, {});
@@ -1008,6 +1140,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     // invariant: the slot count validate_header checked against map_size_; the ring indexes with
     // it, never with the header's field.
     std::size_t slot_count_{0};
+    SealGrid seal_grid_{};
     BackpressurePolicy policy_{BackpressurePolicy::Block};
     WaitStrategy wait_strategy_{WaitStrategy::Adaptive};
     SegmentIdentity identity_{};

@@ -1,3 +1,4 @@
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -9,6 +10,11 @@ namespace
 using namespace std::chrono_literals;
 using Frame = coderoast::ipc::LineFrame<64>;
 using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+
+// refs: DN-103.D29
+// invariant: the seal grid these channels declare; nothing here admits by it, so any non-zero one.
+constexpr coderoast::ipc::SealGrid kAnyGrid{
+    .origin_unix_ns = 0U, .window_length_ns = 1U, .frontier_step_ns = 1U};
 
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
@@ -40,6 +46,7 @@ struct ScopedChannel
                                             .slot_count = slot_count,
                                             .backpressure = backpressure,
                                             .wait_strategy = wait_strategy,
+                                            .seal_grid = kAnyGrid,
                                         })},
           consumer{Channel::open(name, backpressure, wait_strategy)}
     {
@@ -210,6 +217,7 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
         .slot_count = 1U,
         .backpressure = coderoast::ipc::BackpressurePolicy::Block,
         .wait_strategy = coderoast::ipc::WaitStrategy::AdaptivePark,
+        .seal_grid = kAnyGrid,
     })};
 
     ASSERT_EQ(producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
@@ -236,4 +244,59 @@ TEST(ChannelShutdown, RaiiDestructorNoHang)
     EXPECT_LT(std::chrono::steady_clock::now() - t0, 2s)
         << "parked producer not woken; destructor would hang";
     EXPECT_EQ(push_result.load(), coderoast::ipc::PushStatus::Aborted);
+}
+
+// refs: DN-103.D29
+// invariant: the consumer of a channel may live in another process, as the MCP sidecar does, so a
+// Block producer parked on AdaptivePark is woken by that process's pop; a private futex never is.
+TEST(ChannelShutdown, AdaptiveParkIsWokenByAPopInAnotherProcess)
+{
+    constexpr auto kChildPopsAfter{300ms};
+    // invariant: under libc++ a private futex wait times out after 2 s, so a bound past that would
+    // read a missed cross-process wake as a slow one.
+    constexpr auto kWakeBound{1s};
+    ScopedChannel ch{"park_cross_process", /*slot_count=*/1U,
+                     coderoast::ipc::BackpressurePolicy::Block,
+                     coderoast::ipc::WaitStrategy::AdaptivePark};
+    ASSERT_EQ(ch.producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
+
+    // note: forked before any thread starts; the child touches only its inherited shared mapping.
+    const ::pid_t child{::fork()};
+    ASSERT_GE(child, 0) << "fork failed";
+    if (child == 0)
+    {
+        std::this_thread::sleep_for(kChildPopsAfter);
+        Frame out{};
+        std::_Exit(ch.consumer.try_pop(out) ? 0 : 1);
+    }
+
+    std::atomic<bool> returned{false};
+    std::atomic<coderoast::ipc::PushStatus> push_result{coderoast::ipc::PushStatus::Full};
+    std::thread producer_thread{[&]() noexcept
+                                {
+                                    push_result.store(ch.producer.push_status(make_frame(2)));
+                                    returned.store(true, std::memory_order_release);
+                                }};
+    const auto deadline{std::chrono::steady_clock::now() + kChildPopsAfter + kWakeBound};
+    while (!returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(1ms);
+    }
+    const bool woken_by_the_pop{returned.load(std::memory_order_acquire)};
+    if (!woken_by_the_pop)
+    {
+        // note: an abort in this process releases the park, so the arm reds instead of hanging.
+        ch.producer.close_abort();
+    }
+    producer_thread.join();
+    int child_status{0};
+    ASSERT_EQ(::waitpid(child, &child_status, 0), child);
+
+    EXPECT_TRUE(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)
+        << "the child process did not pop the frame";
+    EXPECT_TRUE(woken_by_the_pop)
+        << "the parked producer was still parked "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(kWakeBound).count()
+        << " ms after another process popped a frame and freed its slot";
+    EXPECT_EQ(push_result.load(), coderoast::ipc::PushStatus::Ok);
 }

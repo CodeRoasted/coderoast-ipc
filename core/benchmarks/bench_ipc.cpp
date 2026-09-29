@@ -12,6 +12,11 @@ namespace
 {
 using Frame = coderoast::ipc::LineFrame<256>;
 
+// refs: DN-103.D29
+// invariant: the seal grid the benchmark's channel declares; nothing here admits by it.
+constexpr coderoast::ipc::SealGrid kAnyGrid{
+    .origin_unix_ns = 0U, .window_length_ns = 1U, .frontier_step_ns = 1U};
+
 [[nodiscard]] std::string bench_channel_name()
 {
     return "coderoast_ipc_bench_" + std::to_string(::getpid());
@@ -34,7 +39,8 @@ void BM_SharedMemoryPushPop(benchmark::State& state)
     auto producer{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
         coderoast::ipc::ChannelConfig{.name = name,
                                       .slot_count = static_cast<std::size_t>(state.range(0)),
-                                      .backpressure = coderoast::ipc::BackpressurePolicy::Block})};
+                                      .backpressure = coderoast::ipc::BackpressurePolicy::Block,
+                                      .seal_grid = kAnyGrid})};
     auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
 
     std::uint64_t sequence{0};

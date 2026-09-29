@@ -104,6 +104,10 @@ auto producer{Channel::create(coderoast::ipc::ChannelConfig{
     .name = "myapp.pipeline",
     .slot_count = 8192,
     .backpressure = coderoast::ipc::BackpressurePolicy::DropNewest,
+    // Required: windows of 25 s and a frontier every 1 s, both from the origin.
+    .seal_grid = coderoast::ipc::SealGrid{.origin_unix_ns = 0,
+                                          .window_length_ns = 25'000'000'000,
+                                          .frontier_step_ns = 1'000'000'000},
 })};
 
 coderoast::ipc::DefaultLineFrame frame{};
@@ -162,6 +166,10 @@ no acquire/commit slot-borrow API — the same shape is exercised in
 - **`open()` trusts no header size.** It refuses a segment whose header slot count maps any size but
   the segment's own, and it indexes the ring with the slot count it checked, never the live header
   field.
+- **Every channel declares its seal grid** (`DN-103.D29`). `ChannelConfig::seal_grid` names the
+  producer's windows (origin and length) and the step at which it publishes its seal horizon;
+  `create()` refuses a zero length or step, writes the grid into the header once, and `open()` reads
+  it once (`seal_grid()`). A consumer admits by it and never re-derives it.
 
 **Key Types:**
 - `SharedMemorySpscChannel<Frame>` - SPSC queue template; `create()` / `open()` / `unlink()`
@@ -207,12 +215,23 @@ every caller turned out to be using `FrameOrdering::CausalKey` already, so the
 "raw transport-sequence access" they were retained for had no referent
 (`ADR-11.D3`).
 
+**The admission horizon** (`DN-103.D29`). The merge pulls a shard only while that shard holds no
+frame or its last pulled frame's tick is at or below L, the frontier point of the window holding the
+last emitted tick: `L = origin + ceil((N + 1) · window / step) · step`, `N` that window. So each
+shard holds at most one frame past L, every later frame stays in its ring, and `Block` reaches the
+producer beyond it: the reorder storage holds at most one window up to its frontier point, plus a
+few frames per shard, instead of whatever the producer has written. It is deadlock-free only when
+the producer seals every window by the frontier as it goes (every LogCraft drive does). The shards
+of one set must declare one grid, or the drainer refuses the set at open. The held frames live in
+one storage for every shard; `Config::reserved_frames` reserves it once at a count that bounds them
+(the server passes the start's F), so it never grows.
+
 **Key features:**
 - Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`
 - Deterministic byte-identical replay via `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)`
 - Zero-copy: frame payload is a view into the consumer's internal buffer, valid until the next `try_next()`
 - Shard-aware: handles multi-shard producers with frontier gating until every shard has produced or EOS'd
-- EOS is absorbed internally; `all_shards_done()` flips true once every shard has EOS'd and every heap is empty
+- EOS is absorbed internally; `all_shards_done()` flips true once every shard has EOS'd and the reorder storage is empty
 
 `header.sequence` remains a transport sequence, not a deterministic
 simulation order, and is used internally only for gap detection on a single
@@ -429,7 +448,8 @@ boundary, and implicit padding would put indeterminate bytes on the wire. A `sta
 build.
 
 ABI version constants ensure compatibility:
-- `kSharedChannelAbiVersion = 6` (6 added the producer's owner record to the shared header)
+- `kSharedChannelAbiVersion = 7` (7 added the producer's seal grid to the shared header; 6 added its
+  owner record)
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
 should reconstruct canonical order with `(logical_tick, agent_order,
@@ -484,8 +504,11 @@ per-slot sequence numbers plus a validation re-read on the hot path — see
 - **Spin:** Pure spin (lowest latency, highest CPU).
 - **SpinYield:** Spin then `std::this_thread::yield()` (balanced).
 - **Adaptive:** Spin, yield, then `std::this_thread::sleep_for(1us)` (default, low-latency).
-- **AdaptivePark:** Spin, yield, then futex park via `std::atomic::wait` (efficient).
-- **ParkOnly:** Immediately park (battery-friendly).
+- **AdaptivePark:** Spin, yield, then park on the header's wake epoch through a process-shared
+  futex, never `std::atomic::wait`, whose futex is private to its process: the consumer may live in
+  another process. A parker re-reads its condition after registering, and a pop fences before it
+  reads the parker count, so no free slot is missed. A Block producer is the only thread that parks.
+- **ParkOnly:** Sleeps 1 µs from the first wait.
 
 ---
 

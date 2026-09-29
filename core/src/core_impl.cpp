@@ -3,11 +3,14 @@
 // cannot cross a module boundary; std still arrives by import.
 module;
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <fcntl.h>
+#include <linux/futex.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 module coderoast.ipc.core;
@@ -314,6 +317,33 @@ bool shm_unlink_if_identity(const char* name, SegmentIdentity identity) noexcept
                     static_cast<std::uint64_t>(stats.st_ino) == identity.inode};
     (void)::close(descriptor);
     return same && ::shm_unlink(name) == 0;
+}
+
+// refs: DN-103.D29
+// invariant: the futex word is the atomic's own storage: a lock-free std::atomic<std::uint32_t> has
+// the size of its value, so the kernel reads exactly the four bytes the atomic writes.
+static_assert(sizeof(std::atomic<std::uint32_t>) == sizeof(std::uint32_t));
+
+// invariant: the futex is shared (no FUTEX_PRIVATE_FLAG), keyed on the mapped page, so a waker in
+// another process reaches it; a failed or interrupted wait returns and the caller re-checks.
+void shm_park(const std::atomic<std::uint32_t>& word, std::uint32_t expected) noexcept
+{
+    // note: the syscall takes the word's address as a plain integer pointer.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-type-const-cast)
+    auto* address{const_cast<std::uint32_t*>(reinterpret_cast<const std::uint32_t*>(&word))};
+    // note: futex(2) has no libc wrapper, and syscall(2) is variadic by its POSIX signature.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    static_cast<void>(::syscall(SYS_futex, address, FUTEX_WAIT, expected, nullptr, nullptr, 0));
+}
+
+void shm_unpark_all(std::atomic<std::uint32_t>& word) noexcept
+{
+    // note: the syscall takes the word's address as a plain integer pointer.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* address{reinterpret_cast<std::uint32_t*>(&word)};
+    // note: futex(2) has no libc wrapper, and syscall(2) is variadic by its POSIX signature.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    static_cast<void>(::syscall(SYS_futex, address, FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0));
 }
 
 std::optional<std::size_t> shared_memory_capacity() noexcept

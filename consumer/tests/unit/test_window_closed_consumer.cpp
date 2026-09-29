@@ -16,6 +16,14 @@ using Drainer = coderoast::ipc::consumer::ShmTransportDrainer<Frame>;
 using WindowClosedConsumer = coderoast::ipc::consumer::WindowClosedConsumer<Frame>;
 using Flags = coderoast::ipc::LineFrameFlags;
 
+// refs: DN-103.D29
+// invariant: a grid whose first window outlasts every tick these fixtures carry, so the consumer's
+// admission never holds a frame back and each arm tests the merge alone.
+constexpr coderoast::ipc::SealGrid kOpenGrid{.origin_unix_ns = 0U,
+                                             .window_length_ns =
+                                                 std::numeric_limits<std::uint64_t>::max() / 2U,
+                                             .frontier_step_ns = 1U};
+
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
     return std::string{"coderoast_window_closed_test_"} + suffix + "_" + std::to_string(::getpid());
@@ -62,6 +70,7 @@ struct ProducerHarness
             producers.emplace_back(Channel::create(coderoast::ipc::ChannelConfig{
                 .name = coderoast::ipc::shard_channel_name(base, shard_id),
                 .slot_count = 16,
+                .seal_grid = kOpenGrid,
             }));
         }
     }

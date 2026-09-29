@@ -17,19 +17,21 @@ struct DrainerMetrics
 
 // invariant: every try_select makes exactly one refill; frontier_blocks counts the selections a
 // lagging shard held back.
-// refs: DN-103.D23
-// invariant: the held_ fields are the raw transport interleave: bounded from above, never asserted
-// equal on a live stream, and never an input to anything.
+// refs: DN-103.D23, DN-103.D29
+// invariant: the held_ fields and admission_holds are the raw transport interleave: bounded from
+// above, never asserted equal on a live stream, and never an input to anything.
 struct ReorderMetrics
 {
     std::uint64_t refills{0};
     std::uint64_t selects_attempted{0};
     std::uint64_t selects_succeeded{0};
     std::uint64_t frontier_blocks{0};
-    // note: the frames every per-shard heap holds, now and at the most it ever held.
+    // note: the refills that left a ring unpulled because its shard had passed the horizon.
+    std::uint64_t admission_holds{0};
+    // note: the frames the storage holds, now and at the most it ever held.
     std::uint64_t held_frames{0};
     std::uint64_t held_frames_peak{0};
-    // note: the heaps' storage, capacity times the frame size; a capacity never shrinks.
+    // note: the storage's bytes, its capacity times the frame size; a capacity never shrinks.
     std::uint64_t held_bytes{0};
     std::uint64_t held_bytes_peak{0};
 };
@@ -209,6 +211,23 @@ class ShmTransportDrainer
                                                  config_.backpressure, config_.wait_strategy));
             shards_.emplace_back(std::make_unique<Shard>());
         }
+        // refs: DN-103.D29
+        // assert: the admission reads one grid for every shard, so a set whose shards declare two
+        // is refused here, never merged under either.
+        grid_ = channels_.front().seal_grid();
+        for (std::size_t shard_id{1}; shard_id < channels_.size(); ++shard_id)
+        {
+            const auto& declared{channels_[shard_id].seal_grid()};
+            if (declared != grid_)
+            {
+                throw std::runtime_error(std::format(
+                    "IPC channel set '{}' declares two seal grids: shard 0 has origin {} ns, "
+                    "window {} ns, step {} ns; shard {} has origin {} ns, window {} ns, step {} ns",
+                    config_.channel, grid_.origin_unix_ns, grid_.window_length_ns,
+                    grid_.frontier_step_ns, shard_id, declared.origin_unix_ns,
+                    declared.window_length_ns, declared.frontier_step_ns));
+            }
+        }
     }
 
     ShmTransportDrainer(const ShmTransportDrainer&) = delete;
@@ -224,6 +243,13 @@ class ShmTransportDrainer
     [[nodiscard]] std::size_t shard_count() const noexcept
     {
         return shards_.size();
+    }
+
+    // refs: DN-103.D29
+    // post: the one grid every shard declared, read off the channels at construction.
+    [[nodiscard]] const coderoast::ipc::SealGrid& seal_grid() const noexcept
+    {
+        return grid_;
     }
 
     // invariant: end of stream is the channel's state, not an in-band sentinel.
@@ -266,7 +292,7 @@ class ShmTransportDrainer
         return shards_[shard_id]->eos.load(std::memory_order_acquire);
     }
 
-    // post: every shard has seen EOS; the reorder buffer's heaps may still hold frames.
+    // post: every shard has seen EOS; the reorder buffer's storage may still hold frames.
     [[nodiscard]] bool transport_complete() const noexcept
     {
         for (const auto& shard : shards_)
@@ -333,6 +359,7 @@ class ShmTransportDrainer
     Config config_{};
     std::vector<Channel> channels_;
     std::vector<std::unique_ptr<Shard>> shards_;
+    coderoast::ipc::SealGrid grid_{};
     ConsumerObserver observer_;
 
     std::atomic<std::uint64_t> pulls_attempted_{0};
@@ -341,22 +368,31 @@ class ShmTransportDrainer
     std::atomic<std::uint64_t> seals_observed_{0};
 };
 
-// refs: ADR-11.D3, ADR-11.D4, DN-98.D6
-// invariant: a per-shard CausalKey min-heap merged k-way; single owner thread, no mutex.
-// invariant: a heap holds only frames some live shard's watermark has not passed, so it is bounded
-// by what its shard produced after the laggiest live shard's last seal: one seal interval.
-// invariant: the bound is the scenario's, not a constant: growth past it needs a live shard that
-// stops sealing without EOS, which already reads as frontier_blocks rising and buf_size growing.
-// invariant: no cap by design: a drop would be silent at the consumer, and leaving frames in the
-// ring deadlocks a producer blocked on that ring before it emits the seal the frontier awaits.
+// refs: ADR-11.D3, ADR-11.D4, DN-98.D6, DN-103.D29
+// invariant: one CausalKey min-heap over every shard's frames, with a held count per shard; single
+// owner thread, no mutex.
+// invariant: a shard is pulled only while it holds no frame or its last pulled tick is at or below
+// L, so each shard holds at most one frame past L and Block reaches the producer beyond it.
+// invariant: L is the frontier point of the window holding the last emitted tick, on the grid the
+// producer declared; the key, the frontier gate and the monotonicity check never read it.
+// invariant: no cap by design: a drop would be silent at the consumer, and what the admission
+// leaves in a ring lies past a frontier point, so no seal the frontier awaits waits behind it.
 template <coderoast::ipc::FrameLike Frame = coderoast::ipc::DefaultLineFrame>
 class CausalReorderBuffer
 {
   public:
     // pre: the drainer outlives this buffer, which keeps a non-owning pointer to it.
-    explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer)
-        : drainer_{&drainer}, shards_(drainer.shard_count())
+    // post: the storage holds `reserved_frames` frames before any refill, so a count that bounds
+    // the held frames never grows it.
+    explicit CausalReorderBuffer(ShmTransportDrainer<Frame>& drainer,
+                                 std::optional<std::size_t> reserved_frames = std::nullopt)
+        : drainer_{&drainer}, grid_{drainer.seal_grid()}, shards_(drainer.shard_count())
     {
+        if (reserved_frames.has_value())
+        {
+            held_.reserve(*reserved_frames);
+            publish_held();
+        }
     }
 
     CausalReorderBuffer(const CausalReorderBuffer&) = delete;
@@ -365,28 +401,39 @@ class CausalReorderBuffer
     CausalReorderBuffer& operator=(CausalReorderBuffer&&) = delete;
     ~CausalReorderBuffer() = default;
 
-    // post: moves every frame the shards' rings currently hold into the per-shard heaps and raises
-    // each shard's watermark to the highest causal KEY it has produced.
+    // refs: DN-103.D29
+    // post: every admitted shard's ring is pulled into the storage until it is empty or the shard
+    // holds a frame past L; each shard's watermark is its highest causal KEY pulled.
     // post: when a frame moved, the held frames and bytes are republished and each peak raised.
     void refill()
     {
         refills_.fetch_add(1U, std::memory_order_relaxed);
+        horizon_ = coderoast::ipc::admission_horizon(grid_, anchor_tick());
         Frame frame{};
         bool pulled{false};
+        bool held_back{false};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
-            while (drainer_->try_pull(shard_id, frame))
+            auto& shard{shards_[shard_id]};
+            while (admits(shard) && drainer_->try_pull(shard_id, frame))
             {
+                check_shard_of(frame, shard_id);
                 const auto key{extract_causal_key(frame)};
-                if (key_less(shards_[shard_id].watermark, key))
+                if (key_less(shard.watermark, key))
                 {
-                    shards_[shard_id].watermark = key;
+                    shard.watermark = key;
                 }
-                auto& heap{shards_[shard_id].heap};
-                heap.push_back(std::move(frame));
-                std::ranges::push_heap(heap, Greater{});
+                shard.last_pulled_tick = key.logical_tick;
+                ++shard.held;
+                held_.push_back(std::move(frame));
+                std::ranges::push_heap(held_, Greater{});
                 pulled = true;
             }
+            held_back = held_back || !admits(shard);
+        }
+        if (held_back)
+        {
+            admission_holds_.fetch_add(1U, std::memory_order_relaxed);
         }
         if (pulled)
         {
@@ -394,8 +441,8 @@ class CausalReorderBuffer
         }
     }
 
-    // invariant: the frontier gate — the earliest buffered candidate is emitted only once no
-    // non-EOS shard has an empty heap and a watermark KEY below that candidate's key.
+    // invariant: the frontier gate — the earliest held candidate is emitted only once no non-EOS
+    // shard holds no frame and a watermark KEY below that candidate's key.
     // invariant: the watermark is the whole key, never its tick alone: a shard whose last frame
     // shares the candidate's tick can still deliver a lower agent_order at that tick.
     // post: false when the frontier blocks or no shard holds a candidate.
@@ -404,20 +451,7 @@ class CausalReorderBuffer
         selects_attempted_.fetch_add(1U, std::memory_order_relaxed);
         refill();
 
-        std::size_t best{kNoIndex};
-        for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
-        {
-            if (shards_[shard_id].heap.empty())
-            {
-                continue;
-            }
-            if (best == kNoIndex ||
-                causal_less(shards_[shard_id].heap.front(), shards_[best].heap.front()))
-            {
-                best = shard_id;
-            }
-        }
-        if (best == kNoIndex)
+        if (held_.empty())
         {
             if (!drain_complete_notified_ && drained())
             {
@@ -439,10 +473,10 @@ class CausalReorderBuffer
                                                    .intra_agent_index = key.intra_agent_index,
                                                    .shard_id = 0U};
                               }};
-        const auto best_key{positional(extract_causal_key(shards_[best].heap.front()))};
+        const auto best_key{positional(extract_causal_key(held_.front()))};
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
         {
-            if (!drainer_->shard_eos(shard_id) && shards_[shard_id].heap.empty() &&
+            if (!drainer_->shard_eos(shard_id) && shards_[shard_id].held == 0U &&
                 key_less(positional(shards_[shard_id].watermark), best_key))
             {
                 frontier_blocks_.fetch_add(1U, std::memory_order_relaxed);
@@ -451,18 +485,17 @@ class CausalReorderBuffer
             }
         }
 
-        auto& heap{shards_[best].heap};
-        std::ranges::pop_heap(heap, Greater{});
-        out = std::move(heap.back());
-        heap.pop_back();
-        held_frames_.store(held_frames_.load(std::memory_order_relaxed) - 1U,
-                           std::memory_order_relaxed);
+        std::ranges::pop_heap(held_, Greater{});
+        out = std::move(held_.back());
+        held_.pop_back();
+        --shards_[out.header.shard_id].held;
+        held_frames_.store(held_.size(), std::memory_order_relaxed);
         check_causal_monotonicity(out);
         selects_succeeded_.fetch_add(1U, std::memory_order_relaxed);
         return true;
     }
 
-    // post: every shard's transport signalled EOS and every per-shard heap is empty.
+    // post: every shard's transport signalled EOS and the storage holds no frame.
     [[nodiscard]] bool drained() const noexcept
     {
         for (std::size_t shard_id{0}; shard_id < shards_.size(); ++shard_id)
@@ -471,18 +504,17 @@ class CausalReorderBuffer
             {
                 return false;
             }
-            if (!shards_[shard_id].heap.empty())
-            {
-                return false;
-            }
         }
-        return !shards_.empty();
+        return !shards_.empty() && held_.empty();
     }
 
     struct ShardSummary
     {
         bool eos{false};
         std::size_t buf_size{0};
+        // refs: DN-103.D29
+        // note: the tick of the last frame pulled from the shard, 0 before any.
+        std::uint64_t last_pulled_tick{0};
     };
 
     [[nodiscard]] std::vector<ShardSummary> shard_summaries() const
@@ -493,10 +525,26 @@ class CausalReorderBuffer
         {
             out.push_back(ShardSummary{
                 .eos = drainer_->shard_eos(shard_id),
-                .buf_size = shards_[shard_id].heap.size(),
+                .buf_size = shards_[shard_id].held,
+                .last_pulled_tick = shards_[shard_id].last_pulled_tick,
             });
         }
         return out;
+    }
+
+    // refs: DN-103.D29
+    // post: the anchor the next refill reads: the last emitted frame's tick, or the grid's origin
+    // before any frame was emitted.
+    [[nodiscard]] std::uint64_t anchor_tick() const noexcept
+    {
+        return has_emitted_ ? last_emitted_key_.logical_tick : grid_.origin_unix_ns;
+    }
+
+    // refs: DN-103.D29
+    // post: L as the last refill computed it, 0 before any refill.
+    [[nodiscard]] std::uint64_t admission_horizon() const noexcept
+    {
+        return horizon_;
     }
 
     [[nodiscard]] ReorderMetrics metrics() const noexcept
@@ -506,6 +554,7 @@ class CausalReorderBuffer
             .selects_attempted = selects_attempted_.load(std::memory_order_acquire),
             .selects_succeeded = selects_succeeded_.load(std::memory_order_acquire),
             .frontier_blocks = frontier_blocks_.load(std::memory_order_acquire),
+            .admission_holds = admission_holds_.load(std::memory_order_acquire),
             .held_frames = held_frames_.load(std::memory_order_acquire),
             .held_frames_peak = held_frames_peak_.load(std::memory_order_acquire),
             .held_bytes = held_bytes_.load(std::memory_order_acquire),
@@ -519,6 +568,25 @@ class CausalReorderBuffer
     }
 
   private:
+    struct ShardState
+    {
+        // invariant: per-shard frames are causally non-decreasing, so the highest key pulled
+        // bounds the earliest frame that shard can still deliver.
+        // note: a tick-grain bound admitted a same-tick lower-agent_order overtake (2026-09-08).
+        CausalKey watermark{};
+        // refs: DN-103.D29
+        // invariant: the frames of this shard the storage holds, and the tick of its last pull.
+        std::size_t held{0};
+        std::uint64_t last_pulled_tick{0};
+    };
+
+    // refs: DN-103.D29
+    // post: whether the shard may be pulled: it holds nothing, or its last pull is at or below L.
+    [[nodiscard]] bool admits(const ShardState& shard) const noexcept
+    {
+        return shard.held == 0U || shard.last_pulled_tick <= horizon_;
+    }
+
     void notify(ConsumerEvent event, std::size_t shard_id)
     {
         if (observer_)
@@ -528,17 +596,12 @@ class CausalReorderBuffer
     }
 
     // refs: DN-103.D23
-    // post: the held frames and bytes read off every heap in one pass over the shards, and each
-    // peak raised when passed; this thread is the one writer, so plain stores suffice.
+    // post: the held frames and bytes read off the storage, and each peak raised when passed; this
+    // thread is the one writer, so plain stores suffice.
     void publish_held() noexcept
     {
-        std::uint64_t frames{0};
-        std::uint64_t bytes{0};
-        for (const ShardState& shard : shards_)
-        {
-            frames += shard.heap.size();
-            bytes += shard.heap.capacity() * sizeof(Frame);
-        }
+        const std::uint64_t frames{held_.size()};
+        const std::uint64_t bytes{held_.capacity() * sizeof(Frame)};
         held_frames_.store(frames, std::memory_order_relaxed);
         held_bytes_.store(bytes, std::memory_order_relaxed);
         if (frames > held_frames_peak_.load(std::memory_order_relaxed))
@@ -549,6 +612,24 @@ class CausalReorderBuffer
         {
             held_bytes_peak_.store(bytes, std::memory_order_relaxed);
         }
+    }
+
+    // refs: ADR-11.D3, DN-103.D29
+    // invariant: a frame's shard_id names the ring it came through: the key breaks ties on it and
+    // the held count it returns to is that ring's.
+    // post: prints both and calls std::abort on a frame naming another shard — a producer defect
+    // that no reconciliation downstream could recover.
+    void check_shard_of(const Frame& frame, std::size_t shard_id) const
+    {
+        if (frame.header.shard_id == shard_id)
+        {
+            return;
+        }
+        std::cerr << "FATAL: a frame pulled from shard " << shard_id << " names shard "
+                  << frame.header.shard_id << " (tick=" << frame.header.logical_tick
+                  << " agent_order=" << frame.header.agent_order
+                  << " intra_agent_index=" << frame.header.intra_agent_index << ")\n";
+        std::abort();
     }
 
     // refs: ADR-11.D3
@@ -595,22 +676,14 @@ class CausalReorderBuffer
         }
     };
 
-    struct ShardState
-    {
-        // refs: DN-103.D23
-        // invariant: a min-heap by causal order under Greater, owned as a vector so its storage is
-        // exact: frames are trivially copyable and held in this one allocation.
-        std::vector<Frame> heap{};
-        // invariant: per-shard frames are causally non-decreasing, so the highest key pulled
-        // bounds the earliest frame that shard can still deliver.
-        // note: a tick-grain bound admitted a same-tick lower-agent_order overtake (2026-09-08).
-        CausalKey watermark{};
-    };
-
-    static constexpr std::size_t kNoIndex{std::numeric_limits<std::size_t>::max()};
-
     ShmTransportDrainer<Frame>* drainer_{nullptr};
+    coderoast::ipc::SealGrid grid_{};
     std::vector<ShardState> shards_;
+    // refs: DN-103.D23, DN-103.D29
+    // invariant: a min-heap by causal order under Greater, owned as a vector so its storage is
+    // exact: frames are trivially copyable and held in this one allocation for every shard.
+    std::vector<Frame> held_;
+    std::uint64_t horizon_{0};
     ConsumerObserver observer_;
     bool drain_complete_notified_{false};
 
@@ -621,6 +694,7 @@ class CausalReorderBuffer
     std::atomic<std::uint64_t> selects_attempted_{0};
     std::atomic<std::uint64_t> selects_succeeded_{0};
     std::atomic<std::uint64_t> frontier_blocks_{0};
+    std::atomic<std::uint64_t> admission_holds_{0};
     std::atomic<std::uint64_t> held_frames_{0};
     std::atomic<std::uint64_t> held_frames_peak_{0};
     std::atomic<std::uint64_t> held_bytes_{0};
@@ -719,6 +793,9 @@ class CausalShmConsumer
         coderoast::ipc::BackpressurePolicy backpressure{coderoast::ipc::BackpressurePolicy::Block};
         coderoast::ipc::WaitStrategy wait_strategy{coderoast::ipc::WaitStrategy::Adaptive};
         bool emit_control_frames{false};
+        // refs: DN-103.D29
+        // note: the frames the reorder storage reserves before any refill; absent reserves none.
+        std::optional<std::size_t> reserved_frames;
     };
 
     explicit CausalShmConsumer(Config config)
@@ -728,7 +805,7 @@ class CausalShmConsumer
               .backpressure = config.backpressure,
               .wait_strategy = config.wait_strategy,
           }},
-          buffer_{drainer_},
+          buffer_{drainer_, config.reserved_frames},
           emitter_{buffer_,
                    typename Emitter::Config{.emit_control_frames = config.emit_control_frames}}
     {

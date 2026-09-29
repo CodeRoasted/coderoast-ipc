@@ -21,6 +21,11 @@ namespace
 using Frame = coderoast::ipc::LineFrame<64>;
 using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
 
+// refs: DN-103.D29
+// invariant: the seal grid these channels declare; nothing here admits by it, so any non-zero one.
+constexpr coderoast::ipc::SealGrid kAnyGrid{
+    .origin_unix_ns = 0U, .window_length_ns = 1U, .frontier_step_ns = 1U};
+
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
     static std::atomic<std::uint64_t> counter{0};
@@ -63,8 +68,8 @@ TEST(SegmentLifetime, AClosedProducerLeavesNoNameWhileAnAttachedConsumerStillDra
 {
     constexpr std::uint64_t kFrames{2U};
     const auto name{unique_channel("closed_producer")};
-    std::optional<Channel> producer{
-        Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4U})};
+    std::optional<Channel> producer{Channel::create(
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4U, .seal_grid = kAnyGrid})};
     auto consumer{Channel::open(name)};
     for (std::uint64_t sequence{1}; sequence <= kFrames; ++sequence)
     {
@@ -98,10 +103,10 @@ TEST(SegmentLifetime, AProducerWhoseNameWasRecreatedLeavesTheReplacementInPlace)
     constexpr std::size_t kFirstSlots{4U};
     constexpr std::size_t kReplacementSlots{8U};
     const auto name{unique_channel("recreated")};
-    std::optional<Channel> first{
-        Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = kFirstSlots})};
-    const auto replacement{Channel::create(
-        coderoast::ipc::ChannelConfig{.name = name, .slot_count = kReplacementSlots})};
+    std::optional<Channel> first{Channel::create(coderoast::ipc::ChannelConfig{
+        .name = name, .slot_count = kFirstSlots, .seal_grid = kAnyGrid})};
+    const auto replacement{Channel::create(coderoast::ipc::ChannelConfig{
+        .name = name, .slot_count = kReplacementSlots, .seal_grid = kAnyGrid})};
 
     first.reset();
 
@@ -152,8 +157,8 @@ constexpr std::size_t kSmallTmpfsBytes{std::size_t{1024} * 1024};
     const auto requested{Wide::segment_bytes(slots).value_or(0U)};
     try
     {
-        const auto channel{
-            Wide::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = slots})};
+        const auto channel{Wide::create(coderoast::ipc::ChannelConfig{
+            .name = name, .slot_count = slots, .seal_grid = kAnyGrid})};
         std::println(stderr, "[namespace init] a {} B create returned over a {} B tmpfs", requested,
                      kSmallTmpfsBytes);
         return kCreateReturned;
@@ -220,8 +225,10 @@ constexpr int kFillerRefused{4};
     const std::size_t slots{(kSmallTmpfsBytes / 4U) / sizeof(coderoast::ipc::DefaultLineFrame)};
     try
     {
-        const auto filler{Wide::create(coderoast::ipc::ChannelConfig{
-            .name = unique_channel("capacity_filler"), .slot_count = slots})};
+        const auto filler{
+            Wide::create(coderoast::ipc::ChannelConfig{.name = unique_channel("capacity_filler"),
+                                                       .slot_count = slots,
+                                                       .seal_grid = kAnyGrid})};
         const auto capacity{coderoast::ipc::shared_memory_capacity()};
         if (capacity != std::optional<std::size_t>{kSmallTmpfsBytes})
         {
@@ -369,8 +376,8 @@ class LiveOwner
     {
         try
         {
-            const auto producer{
-                Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4U})};
+            const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+                .name = name, .slot_count = 4U, .seal_grid = kAnyGrid})};
             const char signal{1};
             if (::write(ready_fd, &signal, 1) != 1)
             {
@@ -476,8 +483,8 @@ void judge_a_dead_owner_in_this_namespace(const std::string& name)
     {
         try
         {
-            const auto producer{
-                Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4U})};
+            const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+                .name = name, .slot_count = 4U, .seal_grid = kAnyGrid})};
             std::_Exit(0);
         }
         catch (...)
@@ -623,8 +630,8 @@ constexpr int kStartRunFailed{7};
     {
         try
         {
-            const auto producer{
-                Channel::create(coderoast::ipc::ChannelConfig{.name = orphan, .slot_count = 4U})};
+            const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+                .name = orphan, .slot_count = 4U, .seal_grid = kAnyGrid})};
             std::_Exit(0);
         }
         catch (...)
@@ -641,8 +648,8 @@ constexpr int kStartRunFailed{7};
         return kStartPlantFailed;
     }
 
-    const auto live_producer{
-        Channel::create(coderoast::ipc::ChannelConfig{.name = live, .slot_count = 4U})};
+    const auto live_producer{Channel::create(
+        coderoast::ipc::ChannelConfig{.name = live, .slot_count = 4U, .seal_grid = kAnyGrid})};
     const auto run{coderoast::ipc::testing::run_this_executable(
         filter, {{kStartOrphanVariable, orphan}, {kStartLiveVariable, live}})};
     const bool reported{run.output.contains("segment reaper: removed /dev/shm/" + orphan + ",")};

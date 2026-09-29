@@ -12,6 +12,11 @@ namespace
 {
 using Frame = coderoast::ipc::LineFrame<64>;
 
+// refs: DN-103.D29
+// invariant: the seal grid these channels declare; nothing here admits by it, so any non-zero one.
+constexpr coderoast::ipc::SealGrid kAnyGrid{
+    .origin_unix_ns = 0U, .window_length_ns = 1U, .frontier_step_ns = 1U};
+
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
     return std::string{"coderoast_ipc_test_"} + suffix + "_" + std::to_string(::getpid());
@@ -37,7 +42,7 @@ TEST(SharedMemorySpscChannel, PushesAndPopsLineFramesInOrder)
 {
     const auto name{unique_channel("ordered")};
     auto producer{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
-        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 8})};
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 8, .seal_grid = kAnyGrid})};
     auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
 
     EXPECT_TRUE(producer.push(make_frame(1, "one")));
@@ -61,7 +66,8 @@ TEST(SharedMemorySpscChannel, DropNewestCountsRejectedFrames)
         coderoast::ipc::SharedMemorySpscChannel<Frame>::create(coderoast::ipc::ChannelConfig{
             .name = name,
             .slot_count = 1,
-            .backpressure = coderoast::ipc::BackpressurePolicy::DropNewest})};
+            .backpressure = coderoast::ipc::BackpressurePolicy::DropNewest,
+            .seal_grid = kAnyGrid})};
 
     EXPECT_TRUE(producer.push(make_frame(1, "one")));
     EXPECT_FALSE(producer.push(make_frame(2, "two")));
@@ -74,7 +80,7 @@ TEST(SharedMemoryChannel, ForwardsTheDeclaredIntentChannelToTheConsumer)
     const auto name{unique_channel("intent_channel")};
     auto producer{
         coderoast::ipc::SharedMemorySpscChannel<Frame>::create(coderoast::ipc::ChannelConfig{
-            .name = name, .slot_count = 4, .intent_channel = "annotated"})};
+            .name = name, .slot_count = 4, .intent_channel = "annotated", .seal_grid = kAnyGrid})};
     EXPECT_EQ(producer.intent_channel(), "annotated");
 
     auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
@@ -92,7 +98,7 @@ TEST(SharedMemoryChannel, UndeclaredIntentChannelIsUnspecifiedNotAConcreteName)
 {
     const auto name{unique_channel("intent_channel_none")};
     auto producer{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
-        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4})};
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4, .seal_grid = kAnyGrid})};
     auto consumer{coderoast::ipc::SharedMemorySpscChannel<Frame>::open(name)};
 
     EXPECT_TRUE(producer.intent_channel().empty());
@@ -113,8 +119,10 @@ TEST(SharedMemoryChannel, RefusesAnIntentChannelNameThatWouldNotFit)
     EXPECT_THROW(
         {
             auto ch{coderoast::ipc::SharedMemorySpscChannel<Frame>::create(
-                coderoast::ipc::ChannelConfig{
-                    .name = name, .slot_count = 4, .intent_channel = too_long})};
+                coderoast::ipc::ChannelConfig{.name = name,
+                                              .slot_count = 4,
+                                              .intent_channel = too_long,
+                                              .seal_grid = kAnyGrid})};
         },
         std::invalid_argument)
         << "a name that does not fit must be refused at create, not silently clipped to " +
@@ -131,8 +139,8 @@ TEST(SharedMemoryChannel, RefusesASlotCountWhoseSegmentSizeIsNotRepresentable)
         << unrepresentable << " slots × " << sizeof(Frame) << " B does not fit std::size_t";
     EXPECT_THROW(
         {
-            auto ch{Channel::create(
-                coderoast::ipc::ChannelConfig{.name = name, .slot_count = unrepresentable})};
+            auto ch{Channel::create(coderoast::ipc::ChannelConfig{
+                .name = name, .slot_count = unrepresentable, .seal_grid = kAnyGrid})};
         },
         std::invalid_argument)
         << "slot_count " << unrepresentable << " × " << sizeof(Frame)
@@ -147,8 +155,8 @@ TEST(SharedMemoryChannel, OpenRefusesAHeaderWhoseSlotCountTheMappedSizeCannotHol
     using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
     constexpr std::size_t kHeaderSlots{4U};
     const auto name{unique_channel("slot_count_past_mapping")};
-    const auto producer{
-        Channel::create(coderoast::ipc::ChannelConfig{.name = name, .slot_count = kHeaderSlots})};
+    const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+        .name = name, .slot_count = kHeaderSlots, .seal_grid = kAnyGrid})};
     const auto claimed{Channel::segment_bytes(kHeaderSlots).value_or(0U)};
     const auto held{Channel::segment_bytes(1U).value_or(0U)};
     {
@@ -165,6 +173,81 @@ TEST(SharedMemoryChannel, OpenRefusesAHeaderWhoseSlotCountTheMappedSizeCannotHol
         { const auto consumer{Channel::open(name)}; }, std::runtime_error)
         << "the header claims " << kHeaderSlots << " slots, " << claimed << " B, over a mapping of "
         << held << " B; an open that accepts it pops and pushes past the end of its mapping";
+}
+
+// refs: DN-103.D29
+// invariant: a consumer's admission divides by the window length and the frontier step, so a
+// channel declaring either as zero is refused before any segment exists.
+TEST(SharedMemoryChannel, RefusesASealGridWithAZeroWindowOrStep)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    const auto name{unique_channel("zero_grid")};
+    constexpr coderoast::ipc::SealGrid kNoWindow{
+        .origin_unix_ns = 0U, .window_length_ns = 0U, .frontier_step_ns = 1U};
+    constexpr coderoast::ipc::SealGrid kNoStep{
+        .origin_unix_ns = 0U, .window_length_ns = 1U, .frontier_step_ns = 0U};
+    for (const auto& grid : {kNoWindow, kNoStep, coderoast::ipc::SealGrid{}})
+    {
+        EXPECT_THROW(
+            {
+                auto channel{Channel::create(coderoast::ipc::ChannelConfig{
+                    .name = name, .slot_count = 4, .seal_grid = grid})};
+            },
+            std::invalid_argument)
+            << "window " << grid.window_length_ns << " ns, step " << grid.frontier_step_ns
+            << " ns was admitted";
+        const auto path{"/" + name};
+        const int descriptor{::shm_open(path.c_str(), O_RDONLY, 0)};
+        EXPECT_LT(descriptor, 0) << "a refused create left the segment '" << path << "' behind";
+        if (descriptor >= 0)
+        {
+            static_cast<void>(::close(descriptor));
+        }
+    }
+}
+
+// refs: DN-103.D29
+TEST(SharedMemoryChannel, TheConsumerReadsTheGridTheProducerDeclared)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    const auto name{unique_channel("declared_grid")};
+    constexpr coderoast::ipc::SealGrid kDeclared{.origin_unix_ns = 1'700'000'000'000'000'000U,
+                                                 .window_length_ns = 25'000'000'000U,
+                                                 .frontier_step_ns = 1'000'000'000U};
+    const auto producer{Channel::create(
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4, .seal_grid = kDeclared})};
+    const auto consumer{Channel::open(name)};
+    EXPECT_EQ(producer.seal_grid(), kDeclared);
+    EXPECT_EQ(consumer.seal_grid(), kDeclared)
+        << "the consumer read origin " << consumer.seal_grid().origin_unix_ns << " ns, window "
+        << consumer.seal_grid().window_length_ns << " ns, step "
+        << consumer.seal_grid().frontier_step_ns << " ns off the header";
+}
+
+// refs: DN-103.D29
+// invariant: version 7 added the seal grid to the header, so a mapping stamped 6 is refused.
+TEST(SharedMemoryChannel, OpenRefusesAVersionSixHeader)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    static_assert(coderoast::ipc::kSharedChannelAbiVersion == 7U);
+    const auto name{unique_channel("abi_six")};
+    const auto producer{Channel::create(
+        coderoast::ipc::ChannelConfig{.name = name, .slot_count = 4, .seal_grid = kAnyGrid})};
+    {
+        const auto path{"/" + name};
+        const int descriptor{::shm_open(path.c_str(), O_RDWR, 0)};
+        ASSERT_GE(descriptor, 0) << "shm_open('" << path << "'): "
+                                 << std::error_code(errno, std::generic_category()).message();
+        constexpr std::uint32_t kVersionSix{6U};
+        // invariant: the header opens with the 8-byte magic, then the 4-byte version.
+        constexpr ::off_t kVersionOffset{sizeof(coderoast::ipc::kSharedChannelMagic)};
+        const auto written{::pwrite(descriptor, &kVersionSix, sizeof(kVersionSix), kVersionOffset)};
+        static_cast<void>(::close(descriptor));
+        ASSERT_EQ(written, static_cast<::ssize_t>(sizeof(kVersionSix)));
+    }
+    EXPECT_THROW(
+        { const auto consumer{Channel::open(name)}; }, std::runtime_error)
+        << "a header stamped with ABI version 6 was opened by a version 7 consumer";
 }
 
 int main(int argc, char** argv)

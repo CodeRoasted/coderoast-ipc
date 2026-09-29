@@ -15,6 +15,14 @@ using Emitter = coderoast::ipc::consumer::FrameEmitter<Frame>;
 using Consumer = coderoast::ipc::consumer::CausalShmConsumer<Frame>;
 using Flags = coderoast::ipc::LineFrameFlags;
 
+// refs: DN-103.D29
+// invariant: a grid whose first window outlasts every tick these fixtures carry, so the consumer's
+// admission never holds a frame back and each arm tests the merge alone.
+constexpr coderoast::ipc::SealGrid kOpenGrid{.origin_unix_ns = 0U,
+                                             .window_length_ns =
+                                                 std::numeric_limits<std::uint64_t>::max() / 2U,
+                                             .frontier_step_ns = 1U};
+
 [[nodiscard]] std::string unique_channel(const char* suffix)
 {
     return std::string{"coderoast_drainer_test_"} + suffix + "_" + std::to_string(::getpid());
@@ -38,7 +46,7 @@ using Flags = coderoast::ipc::LineFrameFlags;
     return frame;
 }
 
-[[nodiscard]] std::string payload_of(const Frame& frame)
+[[nodiscard, maybe_unused]] std::string payload_of(const Frame& frame)
 {
     // note: the payload is raw bytes with an explicit size, not a NUL-terminated string.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -46,19 +54,25 @@ using Flags = coderoast::ipc::LineFrameFlags;
                        frame.header.payload_size};
 }
 
+constexpr std::size_t kHarnessSlots{16U};
+
 struct ProducerHarness
 {
     std::string base;
     std::vector<Channel> producers;
 
-    ProducerHarness(const char* suffix, std::size_t shard_count) : base{unique_channel(suffix)}
+    ProducerHarness(const char* suffix, std::size_t shard_count,
+                    coderoast::ipc::SealGrid grid = kOpenGrid,
+                    std::size_t slot_count = kHarnessSlots)
+        : base{unique_channel(suffix)}
     {
         producers.reserve(shard_count);
         for (std::size_t shard_id{0}; shard_id < shard_count; ++shard_id)
         {
             producers.emplace_back(Channel::create(coderoast::ipc::ChannelConfig{
                 .name = coderoast::ipc::shard_channel_name(base, shard_id),
-                .slot_count = 16,
+                .slot_count = slot_count,
+                .seal_grid = grid,
             }));
         }
     }
