@@ -7,4 +7,4 @@ on:
 
 jobs:
   lint:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@6d64666cbf45d76c8329d586922458d5019bb6ff
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@830c46f71e22cd55154dc6c60d896cd56dd0bdd7
