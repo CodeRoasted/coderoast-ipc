@@ -58,6 +58,7 @@ class CodeRoastIpcConsumerConan(ConanFile):
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
+        runpy.run_path(self.conf.get("user.malf:recipe_tests"))["run_tests"](self)
 
     def package(self):
         # install(EXPORT) + the -config.cmake ship the FILE_SET CXX_MODULES + archive (§10.7);

@@ -19,8 +19,15 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(CODEROAST_IPC_CORE_BUILD_TESTS "Build coderoast_ipc_core unit tests" ${PROJECT_IS_TOP_LEVEL})
-option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${PROJECT_IS_TOP_LEVEL})
+# The test and bench switches default OFF when BUILD_TESTING is defined false, which conan does under
+# tools.build:skip_test: then no test or bench target is configured and no test requirement is looked
+# up (DN-142.D5). Otherwise they follow PROJECT_IS_TOP_LEVEL, as on the desk.
+set(CODEROAST_IPC_CORE_TEST_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+if(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+    set(CODEROAST_IPC_CORE_TEST_DEFAULT OFF)
+endif()
+option(CODEROAST_IPC_CORE_BUILD_TESTS "Build coderoast_ipc_core unit tests" ${CODEROAST_IPC_CORE_TEST_DEFAULT})
+option(CODEROAST_IPC_CORE_BUILD_BENCH "Build coderoast_ipc_core benchmarks" ${CODEROAST_IPC_CORE_TEST_DEFAULT})
 
 ###########################################################
 #  Sources
@@ -102,7 +109,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/install/coderoast_ipc_core-config.cmak
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core)
 
 ###########################################################
-#  Tests (only when building the root project)
+#  Tests (the root project and conan create; off under tools.build:skip_test)
 ###########################################################
 if(CODEROAST_IPC_CORE_BUILD_TESTS)
     file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
@@ -148,7 +155,7 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
 endif()
 
 ###########################################################
-#  Benchmarks (only when building the root project)
+#  Benchmarks (the root project and conan create; off under tools.build:skip_test)
 ###########################################################
 if(CODEROAST_IPC_CORE_BUILD_BENCH)
     file(GLOB_RECURSE BENCH_SOURCES CONFIGURE_DEPENDS

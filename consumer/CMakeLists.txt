@@ -17,7 +17,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(CODEROAST_IPC_CONSUMER_BUILD_TESTS "Build coderoast_ipc_consumer unit tests" ${PROJECT_IS_TOP_LEVEL})
+# The test and bench switches default OFF when BUILD_TESTING is defined false, which conan does under
+# tools.build:skip_test: then no test or bench target is configured and no test requirement is looked
+# up (DN-142.D5). Otherwise they follow PROJECT_IS_TOP_LEVEL, as on the desk.
+set(CODEROAST_IPC_CONSUMER_TEST_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+if(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+    set(CODEROAST_IPC_CONSUMER_TEST_DEFAULT OFF)
+endif()
+option(CODEROAST_IPC_CONSUMER_BUILD_TESTS "Build coderoast_ipc_consumer unit tests" ${CODEROAST_IPC_CONSUMER_TEST_DEFAULT})
 
 # Conan dependencies
 find_package(coderoast_ipc_core REQUIRED CONFIG)
