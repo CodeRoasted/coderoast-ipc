@@ -25,7 +25,7 @@ jobs:
   # release path takes no self-hosted runner it does not need. `BUILD_RECORD_READ_TOKEN` is a
   # fine-grained PAT whose only grant is `Actions: Read-only` on CodeRoasted/coderoast.
   attest:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@3924e57362e8f40c91fe90bb63a4943de59babd7
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@7b8d8d32ee224b3f09d116872c331c2adc087253
     secrets:
       BUILD_RECORD_READ_TOKEN: ${{ secrets.BUILD_RECORD_READ_TOKEN }}
 
@@ -35,7 +35,7 @@ jobs:
     secrets: inherit
   release:
     needs: [attest, ci]
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@3924e57362e8f40c91fe90bb63a4943de59babd7
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@7b8d8d32ee224b3f09d116872c331c2adc087253
     with:
       tag: ${{ github.event.inputs.tag || github.ref_name }}
       packages: |
