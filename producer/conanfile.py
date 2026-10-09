@@ -1,6 +1,7 @@
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps
 import os
+import runpy
 
 
 required_conan_version = ">=2.28"
@@ -17,6 +18,12 @@ class CodeRoastIpcProducerConan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "api/*", "tests/*"
     requires = "coderoast_ipc_core/1.10.7"
+
+    def export_sources(self):
+        # The export is the TRACKED files under exports_sources, never the disk's (DN-142.D4 (b)):
+        # malf's helper, staged in the conan home and named by global.conf, drops every file git
+        # does not track. Without it the export fails; it never falls back to the disk silently.
+        runpy.run_path(self.conf.get("user.malf:recipe_exports"))["narrow_to_tracked"](self)
 
     def layout(self):
         # Keyed editable build dir: malf sets the env (all profiles incl. sanitizer); a RAW
