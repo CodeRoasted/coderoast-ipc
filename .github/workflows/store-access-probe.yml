@@ -1,0 +1,20 @@
+name: Store access probe
+
+# This repository's leg of the artefact store's read proof (DN-142.D6, R5): its GITHUB_TOKEN must
+# read store-coderoast-ipc and be refused on store-insight-canon, and a manifest PUT into store-coderoast-ipc must be refused.
+# The instrument, its pairing and the seed and grant procedure are malf-toolchain's
+# store-access-probe.yml and runner/README.md § "The store access probe". Dispatch only.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    uses: CodeRoasted/malf-toolchain/.github/workflows/store-access-probe.yml@4fbfa2e6c0bffce2f6b43abb7b9296b04f72563e
+    permissions:
+      packages: write   # the write attempt must hold the scope, so its refusal is the package's grant
+    with:
+      granted: store-coderoast-ipc
+      ungranted: store-insight-canon
