@@ -7,7 +7,7 @@ on:
 
 jobs:
   lint:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@aa2f52da41c29bbe88d72591a5517b10fdb951bc
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@df8c89b5a3c3575c31e69552facc106b80303bc8
     permissions:
       contents: read
       actions: read   # malf's conan cache restore reads this job's runner group (actions-cache-allowed.sh)
