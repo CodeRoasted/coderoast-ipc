@@ -5,6 +5,10 @@ packages:
     source_public: true
     release: true
     depends: []
+    # DN-142.D25 (5) call D: the verdict `coderoast_ipc_core/bench`, run inside this package's create under step 0's
+    # `user.malf:bench`; each JSON is published under the name the hub collects.
+    objects:
+      bench/coderoast_ipc_core_bench.json: {published: {assets: [{name: coderoast-ipc-core-benchmark.json}]}}
   coderoast_ipc_consumer:
     path: consumer
     version: 1.10.7

@@ -1,5 +1,15 @@
 name: Release
 
+# On a vX.Y.Z tag (or a manual re-run): attest -> publish. A RELEASE IS A PUBLICATION (DN-142.D9,
+# ROADMAP N360): coderoast_ipc_core, coderoast_ipc_consumer and coderoast_ipc_producer were built,
+# tested and judged once, at step 0, and stored by the writer, and the core benchmark ran inside its
+# create as a verdict of its own (DN-142.D25 (5), call D); `publish` (malf's coderoast-publish.yml)
+# attaches this repository's writer-signed slice of the attested step-0 record — the three package
+# transports, the benchmark JSON and the slice — and reads the Release back equal to it, both ways.
+# Nothing here builds, tests, measures or packs. This repository is PUBLIC, so both jobs run on
+# GitHub-hosted machines, and `publish` reads the private `store-coderoast-ipc` package through this
+# repository's Read grant on it.
+
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -10,38 +20,26 @@ on:
         required: true
 
 permissions:
-  contents: write
-  # Sift needed permissions (PR + actions write)
-  pull-requests: write
-  actions: write
+  contents: write   # create the Release at the existing tag and upload its assets
+  packages: read    # `publish` reads this repository's own store package
+  actions: read     # `attest` reads the superproject's step-0 runs (malf coderoast-attest.yml asks it)
 
 jobs:
   # ── The tag's ONE gate: the tagged tree is the tree step 0 judged ─────────────────────────────
   # malf-toolchain's `coderoast-attest.yml` proves that the commit this tag points at is the commit
   # step 0's build record (`pharos-build.yml` in the private superproject) verified for this
-  # repository, and refuses the tag otherwise (DN-108.D7). Every other job in this file `needs:
-  # attest`, so a refusal lands before anything builds or publishes; `pin_coherence` INV-22 holds
-  # that shape in every releasing repository. Hosted (no `runs-on`): it compiles nothing, and a
-  # release path takes no self-hosted runner it does not need. `BUILD_RECORD_READ_TOKEN` is a
-  # fine-grained PAT whose only grant is `Actions: Read-only` on CodeRoasted/coderoast.
+  # repository, and that a store writer sealed that record, and refuses the tag otherwise
+  # (DN-108.D7). Every other job in this file `needs: attest`, so a refusal lands before anything
+  # publishes; `pin_coherence` INV-22 holds that shape in every releasing repository. Hosted (no
+  # `runs-on`). `BUILD_RECORD_READ_TOKEN` is a fine-grained PAT whose only grant is
+  # `Actions: Read-only` on CodeRoasted/coderoast.
   attest:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@d9827c46a6cfbccd10d7ff5ffa4d66c377a35bfc
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@11b01ac01c85b6a7719d3daec68b07dd7e6c77fa
     secrets:
       BUILD_RECORD_READ_TOKEN: ${{ secrets.BUILD_RECORD_READ_TOKEN }}
 
-  ci:
+  publish:
     needs: attest
-    uses: ./.github/workflows/ci.yml
-    secrets: inherit
-  release:
-    needs: [attest, ci]
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-release.yml@d9827c46a6cfbccd10d7ff5ffa4d66c377a35bfc
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-publish.yml@11b01ac01c85b6a7719d3daec68b07dd7e6c77fa
     with:
-      tag: ${{ github.event.inputs.tag || github.ref_name }}
-      packages: |
-        coderoast_ipc_core:core
-        coderoast_ipc_consumer:consumer
-        coderoast_ipc_producer:producer
-      benchmark: 'coderoast_ipc_core_bench=coderoast-ipc-core'
-      benchmark-subdir: core
-    secrets: inherit
+      record-sha256: ${{ needs.attest.outputs.record-sha256 }}
