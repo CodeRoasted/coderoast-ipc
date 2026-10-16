@@ -9,7 +9,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcProducerConan(ConanFile):
     name = "coderoast_ipc_producer"
-    version = "1.10.7"
+    version = "1.10.8"
     # 1.5.1 unwrap: PURE named module (coderoast.ipc.producer) — header-only api/ surface now
     # lives in the module interface; the textual api/ headers are gone. static-library; no header surface.
     package_type = "static-library"
@@ -17,7 +17,7 @@ class CodeRoastIpcProducerConan(ConanFile):
     description = "Producer-side helpers for coderoast-ipc (frame building, sequence tracking, shard distribution)."
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "api/*", "tests/*"
-    requires = "coderoast_ipc_core/1.10.7"
+    requires = "coderoast_ipc_core/1.10.8"
 
     def export_sources(self):
         # The export is the TRACKED files under exports_sources, never the disk's (DN-142.D4 (b)):

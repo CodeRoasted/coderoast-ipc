@@ -1,7 +1,7 @@
 packages:
   coderoast_ipc_core:
     path: core
-    version: 1.10.7
+    version: 1.10.8
     source_public: true
     release: true
     depends: []
@@ -11,13 +11,13 @@ packages:
       bench/coderoast_ipc_core_bench.json: {published: {assets: [{name: coderoast-ipc-core-benchmark.json}]}}
   coderoast_ipc_consumer:
     path: consumer
-    version: 1.10.7
+    version: 1.10.8
     source_public: true
     release: true
     depends: [coderoast_ipc_core]
   coderoast_ipc_producer:
     path: producer
-    version: 1.10.7
+    version: 1.10.8
     source_public: true
     release: true
     depends: [coderoast_ipc_core]
