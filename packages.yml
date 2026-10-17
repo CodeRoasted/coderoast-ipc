@@ -21,3 +21,14 @@ packages:
     source_public: true
     release: true
     depends: [coderoast_ipc_core]
+  # DN-142.D29 (ix): the core's four segment arms that mount a private tmpfs in a fresh user, pid and
+  # mount namespace (SegmentReservation x2, SegmentReaper x2), homed in a test-only package built
+  # against the STORED core, so coderoast_ipc_core's own create runs confined and stays reusable.
+  coderoast_ipc_namespace_tests:
+    path: namespace_tests
+    version: 1.10.8
+    source_public: true
+    release: false
+    depends: [coderoast_ipc_core]
+    unconfined:
+      why: "every test here mounts a private tmpfs at /dev/shm inside a fresh user, pid and mount namespace, and a Landlock domain forbids any mount-topology change, even one granting the whole filesystem (DN-142.D29, verified with landlock_sandbox.py)"

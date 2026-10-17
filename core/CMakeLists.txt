@@ -106,6 +106,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/install/coderoast_ipc_core-config.cmak
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/reap_orphaned_segments_at_start_environment.cpp
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/private_pid_namespace.hpp
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/private_pid_namespace.cpp
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/segment_test_helpers.hpp
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/coderoast_ipc_core)
 
 ###########################################################
@@ -139,12 +140,12 @@ if(CODEROAST_IPC_CORE_BUILD_TESTS)
             CXX_SCAN_FOR_MODULES ON CXX_MODULE_STD ON)
         include(${CMAKE_CURRENT_SOURCE_DIR}/tests/support/coderoast_ipc_core_testing.cmake)
         coderoast_ipc_reap_orphaned_segments_at_start(coderoast_ipc_core_tests)
-        coderoast_ipc_private_pid_namespace(coderoast_ipc_core_tests)
         include(GoogleTest)
         # A googletest skip exits 0, so without this property ctest counts a skipped case as
-        # PASSED; with it the case is listed under "The following tests did not run". Today that is
-        # every arm that runs inside a private namespace (the full-tmpfs arm, the executable-start
-        # arm and the dead-owner arm) on a host that refuses an unprivileged user namespace.
+        # PASSED; with it the case is listed under "The following tests did not run", where malf
+        # reds an undeclared one (DN-142.D23). No arm here needs a namespace: the four that mount a
+        # private tmpfs are coderoast_ipc_namespace_tests' (DN-142.D29 (ix)), so a namespace arm
+        # moved back here would skip under the confined create and red it.
         # The regex matches googletest's own skip banner; the two spaces are part of it.
         gtest_discover_tests(coderoast_ipc_core_tests
             PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
