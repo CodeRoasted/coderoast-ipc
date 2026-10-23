@@ -210,26 +210,45 @@ TEST(ReorderMetrics, CountsRefillsSelectsAndFrontierBlocks)
 
 TEST(ReorderObserver, FiresFrontierBlockAndDrainComplete)
 {
-    ProducerHarness producers{"obs_reorder", 1};
-    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 1}};
+    // invariant: shard 1 is emptied first while shard 0 still holds a later candidate, so the one
+    // frontier block names shard 1; a single shard could never hold the frontier back.
+    using coderoast::ipc::consumer::ConsumerEvent;
+    ProducerHarness producers{"obs_reorder", 2};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = 2}};
     Buffer buffer{drainer};
 
-    std::vector<coderoast::ipc::consumer::ConsumerEvent> events;
+    std::vector<coderoast::ipc::consumer::ConsumerEventPayload> events;
     buffer.set_observer([&events](const coderoast::ipc::consumer::ConsumerEventPayload& event)
-                        { events.push_back(event.event); });
+                        { events.push_back(event); });
+    const auto count_of{
+        [&events](ConsumerEvent kind)
+        {
+            return static_cast<std::size_t>(std::ranges::count(
+                events, kind, &coderoast::ipc::consumer::ConsumerEventPayload::event));
+        }};
 
-    (void)producers.producers[0].push(make_frame(1, 0, "x"));
+    (void)producers.producers[0].push(make_frame(1, 0, "s0-a", /*logical_tick=*/10));
+    (void)producers.producers[1].push(make_frame(2, 1, "s1-a", /*logical_tick=*/5));
     Frame out{};
     ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s1-a");
+    EXPECT_FALSE(buffer.try_select(out)) << "shard 1 may still deliver below tick 10";
+
+    ASSERT_EQ(count_of(ConsumerEvent::kFrontierBlock), 1U)
+        << "kFrontierBlock must fire once for the held-back select";
+    const auto block{std::ranges::find(events, ConsumerEvent::kFrontierBlock,
+                                       &coderoast::ipc::consumer::ConsumerEventPayload::event)};
+    EXPECT_EQ(block->shard_id, 1U) << "the block names the lagging shard";
 
     producers.producers[0].close_graceful();
+    producers.producers[1].close_graceful();
+    ASSERT_TRUE(buffer.try_select(out));
+    EXPECT_EQ(payload_of(out), "s0-a");
     EXPECT_FALSE(buffer.try_select(out));
     EXPECT_FALSE(buffer.try_select(out));
 
-    const auto drain_complete{coderoast::ipc::consumer::ConsumerEvent::kDrainComplete};
-    const auto count{
-        static_cast<std::size_t>(std::count(events.begin(), events.end(), drain_complete))};
-    EXPECT_EQ(count, 1U) << "kDrainComplete must fire exactly once";
+    EXPECT_EQ(count_of(ConsumerEvent::kDrainComplete), 1U)
+        << "kDrainComplete must fire exactly once";
 }
 
 // refs: DN-98.D6

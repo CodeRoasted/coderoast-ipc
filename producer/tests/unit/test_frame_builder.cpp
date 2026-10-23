@@ -42,11 +42,11 @@ TEST(FrameBuilder, ModulosShardIdAgainstShardCount)
     EXPECT_EQ(frame.header.shard_id, 5 % 3);
 }
 
-TEST(StableAgentId, HasConsistentHashForSameName)
+TEST(StableAgentId, IsTheFnv1a32HashOfTheName)
 {
-    const auto id1 = coderoast::ipc::producer::stable_agent_id("my_app");
-    const auto id2 = coderoast::ipc::producer::stable_agent_id("my_app");
-    EXPECT_EQ(id1, id2);
+    // note: FNV-1a 32-bit values computed outside this codebase pin the wire id across processes.
+    EXPECT_EQ(coderoast::ipc::producer::stable_agent_id(""), 0x811C9DC5U);
+    EXPECT_EQ(coderoast::ipc::producer::stable_agent_id("my_app"), 0xF8559637U);
 }
 
 TEST(StableAgentId, DifferentNamesProduceDifferentHashes)
