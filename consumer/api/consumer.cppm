@@ -18,8 +18,8 @@ struct DrainerMetrics
 // invariant: every try_select makes exactly one refill; frontier_blocks counts the selections a
 // lagging shard held back.
 // refs: DN-103.D23, DN-103.D29
-// invariant: the held_ fields and admission_holds are the raw transport interleave: bounded from
-// above, never asserted equal on a live stream, and never an input to anything.
+// invariant: held_frames* and admission_holds are the raw transport interleave: bounded from
+// above, never asserted equal on a live stream, never an input; held_bytes* is a capacity.
 struct ReorderMetrics
 {
     std::uint64_t refills{0};
