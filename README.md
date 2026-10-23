@@ -42,48 +42,24 @@ Each package ships as a **pure C++ named module** — consumers `import` it; the
 
 ## Quick Start
 
-### Building Locally (No External Tools Required)
+### Building
+
+The repository holds one Conan recipe per package (`core/`, `consumer/`, `producer/`, plus the
+test-only `namespace_tests/`); there is no root recipe. Inside the CodeRoast workspace, `malf`
+builds every package under a directory in dependency order, with its tests and benchmarks:
 
 ```bash
-# Clone the repo
-cd coderoast-ipc
-
-# Build all three packages into local .conan2 cache
-conan create . \
-  --profile:host=.conan2/profiles/linux-gcc16-release \
-  --profile:build=.conan2/profiles/linux-gcc16-release \
-  --build=missing \
-  --build-test=missing
+malf build coderoast-ipc     # compile all four packages (package + tests + benches)
+malf test coderoast-ipc      # the same build, then ctest
 ```
 
-**What this does:**
-- Detects profile at `.conan2/profiles/linux-gcc16-release`
-- Builds/tests core, consumer, and producer packages
-- Stores packages in local `.conan2` cache
-- Exits with status 0 on success
-
-### Building Individual Packages
-
-If you only need specific packages:
+Standalone, create each package with Conan, core first (the canonical profiles live in
+[malf-toolchain](https://github.com/CodeRoasted/malf-toolchain)'s `profiles/`):
 
 ```bash
-# Build core only
-conan create core \
-  --profile:host=.conan2/profiles/linux-gcc16-release \
-  --profile:build=.conan2/profiles/linux-gcc16-release \
-  --build=missing
-
-# Build consumer (automatically pulls core dependency)
-conan create consumer \
-  --profile:host=.conan2/profiles/linux-gcc16-release \
-  --profile:build=.conan2/profiles/linux-gcc16-release \
-  --build=missing
-
-# Build producer (automatically pulls core dependency)
-conan create producer \
-  --profile:host=.conan2/profiles/linux-gcc16-release \
-  --profile:build=.conan2/profiles/linux-gcc16-release \
-  --build=missing
+conan create core     --profile:all=linux-gcc16-release --build=missing
+conan create consumer --profile:all=linux-gcc16-release --build=missing   # requires core
+conan create producer --profile:all=linux-gcc16-release --build=missing   # requires core
 ```
 
 ---
@@ -285,28 +261,12 @@ scheduling.
 
 ## Local Development
 
-### CMake Iteration (Manual Builds & Tests)
-
-For iterative development without Conan:
+### Build, Test, Benchmark
 
 ```bash
-# Install dependencies locally
-conan install . \
-  --output-folder=build \
-  --build=missing \
-  --profile:host=.conan2/profiles/linux-gcc16-release \
-  --profile:build=.conan2/profiles/linux-gcc16-release \
-  -s build_type=Debug
-
-# Build with CMake
-cmake --preset conan-debug -S . -B build
-cmake --build build
-
-# Run tests
-ctest --test-dir build --output-on-failure
-
-# Run benchmarks
-./build/core/bin/coderoast_ipc_core_bench
+malf build coderoast-ipc          # package + tests + benches, every package
+malf test coderoast-ipc           # the same build, then ctest
+malf bench coderoast-ipc/core     # the same build, then the core benchmarks
 ```
 
 ### Code Quality
@@ -325,38 +285,15 @@ In the workspace, `malf lint coderoast-ipc` runs the same checks under the pinne
 
 ---
 
-## Publishing & Stable Cache
+## Publishing
 
-### Exporting to Shared Stable Cache
-
-After bumping version or changing ABI, export to the shared cache where downstream repos resolve dependencies:
-
-```bash
-# Export all three packages to /opt/coderoast/conan-stable
-CONAN_HOME=/opt/coderoast/conan-stable conan create . \
-  --profile:host=linux-gcc16-release \
-  --profile:build=linux-gcc16-release \
-  --build=missing
-```
-
-This makes packages available to:
+A `vX.Y.Z` tag publishes; nothing at tag time builds or tests. `coderoast_ipc_core`,
+`coderoast_ipc_consumer` and `coderoast_ipc_producer` are built, tested and judged once, before the
+tag, and stored; the release workflow (`.github/workflows/release.yaml`) attaches the stored
+package transports and the core benchmark JSON to the GitHub Release and reads them back. Downstream
+repositories consume the sub-packages they need:
 - `logcraft` (consumes `coderoast_ipc_core`)
 - `insight-eidos` (consumes `coderoast_ipc_consumer`)
-- Any other downstream package
-
-### GitHub Release Workflow
-
-Tags use `vX.Y.Z` semver format. GitHub Actions automatically:
-
-1. Verify `conanfile.py` version matches tag
-2. Build all three packages
-3. Export Conan cache tarball (`coderoast_ipc-X.Y.Z.tgz`)
-4. Attach tarball to GitHub release
-
-Consumers restore with:
-```bash
-conan cache restore coderoast_ipc-X.Y.Z.tgz
-```
 
 ---
 
@@ -375,12 +312,8 @@ conan cache restore coderoast_ipc-X.Y.Z.tgz
 
 ### Profile not found
 
-If you get `profile 'linux-gcc16-release' does not exist`, ensure it's created:
-
-```bash
-conan profile detect --force
-# Then copy/customize as needed to .conan2/profiles/linux-gcc16-release
-```
+If you get `profile 'linux-gcc16-release' does not exist`, copy it from malf-toolchain's
+`profiles/` into your Conan home's `profiles/` directory.
 
 ### Cannot find gtest or benchmark
 
@@ -388,17 +321,15 @@ These are test-only dependencies and only needed if building with tests. If you 
 
 ```bash
 # Use --build=missing to auto-build test dependencies
-conan create . --build=missing --build-test=missing
+conan create core --build=missing --build-test=missing
 ```
 
 ### Tests pass but benchmarks won't run
 
-Benchmarks are optional and only built if `CODEROAST_IPC_CORE_BUILD_BENCH=ON`. To enable:
+Benchmarks are built only with `CODEROAST_IPC_CORE_BUILD_BENCH=ON`, which `malf` sets. To run them:
 
 ```bash
-cmake --preset conan-debug -S core -B core/build -DCODEROAST_IPC_CORE_BUILD_BENCH=ON
-cmake --build core/build
-./core/build/bin/coderoast_ipc_core_bench
+malf bench coderoast-ipc/core
 ```
 
 ---
