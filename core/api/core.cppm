@@ -387,6 +387,10 @@ struct alignas(kCacheLineBytes) Cursor
     std::atomic<std::uint64_t> value{0};
 };
 
+// invariant: closing_at's value until close_graceful publishes it; no read position reaches it, so
+// a pop comparing against it never concludes Closed.
+inline constexpr std::uint64_t kClosingAtUnpublished{std::numeric_limits<std::uint64_t>::max()};
+
 // invariant: lives at the start of the SHM mapping; the hot cursors sit on their own cache lines
 // and the state machine on another, so close/abort never false-shares.
 struct SharedChannelHeader
@@ -420,7 +424,9 @@ struct SharedChannelHeader
 
     Cursor write_sequence{};
     Cursor read_sequence{};
-    Cursor closing_at{};
+    // invariant: kClosingAtUnpublished until the close_graceful winning Open to Closing stores the
+    // write position it read after its CAS; stored once, with release.
+    Cursor closing_at{.value{kClosingAtUnpublished}};
     Cursor dropped{};
     Cursor blocked_events{};
     Cursor wait_loops{};
@@ -821,15 +827,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return state() == ChannelState::Aborted;
     }
 
-    // post: the write_sequence snapshot taken at close_graceful, meaningful only once state() is
-    // not Open; it is how a consumer detects delivery with no EOS frame.
-    [[nodiscard]] std::uint64_t closing_at() const noexcept
-    {
-        return header_ == nullptr ? 0U : header_->closing_at.value.load(std::memory_order_acquire);
-    }
-
     // post: idempotent, non-blocking, callable from any thread; later pushes return Closed, and it
     // cannot downgrade an Aborted channel.
+    // invariant: only the CAS winner stores closing_at, so a pop can see Closing while closing_at
+    // still reads kClosingAtUnpublished; try_pop_status answers that window with Empty.
     void close_graceful() noexcept
     {
         if (header_ == nullptr)
@@ -940,8 +941,10 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return PopStatus::Empty;
         }
-        // assert: reaching closing_at on an empty ring is terminal, so Closing is promoted.
+        // invariant: the acquire pairs with close_graceful's release store, so a published value
+        // counts every frame the closer saw written; an unpublished one exceeds every read.
         const auto closing_seq{header_->closing_at.value.load(std::memory_order_acquire)};
+        // assert: an empty ring at a published closing_at is terminal, so Closing is promoted.
         if (read >= closing_seq)
         {
             std::uint8_t exp{static_cast<std::uint8_t>(ChannelState::Closing)};
@@ -950,8 +953,8 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                 std::memory_order_acquire);
             return PopStatus::Closed;
         }
-        // assert: the ring read empty before closing_at — the producer raced us; the next call
-        // sees the frame or the closing condition.
+        // assert: the ring read empty before closing_at, or before its publication — a frame or the
+        // store is still landing, and the next call sees it.
         return PopStatus::Empty;
     }
 

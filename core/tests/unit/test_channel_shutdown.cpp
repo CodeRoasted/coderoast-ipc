@@ -1,3 +1,5 @@
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -299,4 +301,106 @@ TEST(ChannelShutdown, AdaptiveParkIsWokenByAPopInAnotherProcess)
         << std::chrono::duration_cast<std::chrono::milliseconds>(kWakeBound).count()
         << " ms after another process popped a frame and freed its slot";
     EXPECT_EQ(push_result.load(), coderoast::ipc::PushStatus::Ok);
+}
+
+namespace
+{
+// invariant: the header's state byte opens its last cache line, which ends where the slots begin.
+constexpr std::size_t kHeaderCacheLineBytes{64U};
+
+// post: the state byte read through the segment's file, as every mapping sees it; nullopt after a
+// failed read, which fails the arm.
+[[nodiscard]] std::optional<std::uint8_t> read_state_byte(const std::string& name, ::off_t offset)
+{
+    const auto path{"/" + name};
+    const int descriptor{::shm_open(path.c_str(), O_RDONLY, 0)};
+    if (descriptor < 0)
+    {
+        ADD_FAILURE() << "shm_open('" << path
+                      << "'): " << std::error_code(errno, std::generic_category()).message();
+        return std::nullopt;
+    }
+    std::uint8_t value{0};
+    const auto read{::pread(descriptor, &value, sizeof(value), offset)};
+    static_cast<void>(::close(descriptor));
+    if (read != static_cast<::ssize_t>(sizeof(value)))
+    {
+        ADD_FAILURE() << "pread of the state byte at offset " << offset << " returned " << read;
+        return std::nullopt;
+    }
+    return value;
+}
+
+void write_state_byte(const std::string& name, ::off_t offset, coderoast::ipc::ChannelState state)
+{
+    const auto path{"/" + name};
+    const int descriptor{::shm_open(path.c_str(), O_RDWR, 0)};
+    ASSERT_GE(descriptor, 0) << "shm_open('" << path
+                             << "'): " << std::error_code(errno, std::generic_category()).message();
+    const auto value{static_cast<std::uint8_t>(state)};
+    const auto written{::pwrite(descriptor, &value, sizeof(value), offset)};
+    static_cast<void>(::close(descriptor));
+    ASSERT_EQ(written, static_cast<::ssize_t>(sizeof(value)));
+}
+
+// post: the state byte's offset for `slot_count` slots, derived from the layout and witnessed by a
+// close_graceful and a close_abort, so a reordered header reds here, never poking another field.
+[[nodiscard]] std::optional<::off_t> witnessed_state_offset(std::size_t slot_count)
+{
+    const auto segment{Channel::segment_bytes(slot_count)};
+    if (!segment.has_value())
+    {
+        ADD_FAILURE() << "segment_bytes(" << slot_count << ") is not representable";
+        return std::nullopt;
+    }
+    const auto offset{
+        static_cast<::off_t>(*segment - (slot_count * sizeof(Frame)) - kHeaderCacheLineBytes)};
+    ScopedChannel witness{"state_offset_witness", slot_count};
+    const auto open_byte{read_state_byte(witness.name, offset)};
+    witness.producer.close_graceful();
+    const auto closing_byte{read_state_byte(witness.name, offset)};
+    witness.producer.close_abort();
+    const auto aborted_byte{read_state_byte(witness.name, offset)};
+    const bool witnessed{
+        open_byte == static_cast<std::uint8_t>(coderoast::ipc::ChannelState::Open) &&
+        closing_byte == static_cast<std::uint8_t>(coderoast::ipc::ChannelState::Closing) &&
+        aborted_byte == static_cast<std::uint8_t>(coderoast::ipc::ChannelState::Aborted)};
+    if (!witnessed)
+    {
+        ADD_FAILURE() << "the byte at offset " << offset << " read "
+                      << static_cast<int>(open_byte.value_or(0xFFU)) << ", "
+                      << static_cast<int>(closing_byte.value_or(0xFFU)) << ", "
+                      << static_cast<int>(aborted_byte.value_or(0xFFU))
+                      << " across Open, close_graceful and close_abort; expected 0, 1, 3";
+        return std::nullopt;
+    }
+    return offset;
+}
+} // namespace
+
+// invariant: a pop whose write load precedes a push, and whose state load falls between a close's
+// state change and its closing_at store, sees this header: empty ring, Closing, closing_at unset.
+// assert: Closed there loses the frame pushed before the close, so the pop must report Empty.
+TEST(ChannelShutdown, ClosingBeforeClosingAtIsPublishedIsNotClosed)
+{
+    constexpr std::size_t kSlots{8U};
+    const auto offset{witnessed_state_offset(kSlots)};
+    ASSERT_TRUE(offset.has_value());
+
+    ScopedChannel ch{"closing_unpublished", kSlots};
+    ASSERT_EQ(ch.producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
+    Frame out{};
+    ASSERT_EQ(ch.consumer.try_pop_status(out), coderoast::ipc::PopStatus::Ok);
+    write_state_byte(ch.name, *offset, coderoast::ipc::ChannelState::Closing);
+    ASSERT_EQ(ch.consumer.state(), coderoast::ipc::ChannelState::Closing);
+
+    const auto status{ch.consumer.try_pop_status(out)};
+    EXPECT_EQ(status, coderoast::ipc::PopStatus::Empty)
+        << "try_pop_status returned PopStatus " << static_cast<int>(status)
+        << " (expected Empty = " << static_cast<int>(coderoast::ipc::PopStatus::Empty)
+        << ", Closed = " << static_cast<int>(coderoast::ipc::PopStatus::Closed)
+        << ") at read position 1 with the state Closing and closing_at never published";
+    EXPECT_EQ(ch.consumer.state(), coderoast::ipc::ChannelState::Closing)
+        << "the pop promoted the state to " << static_cast<int>(ch.consumer.state())
+        << " before closing_at was published";
 }
