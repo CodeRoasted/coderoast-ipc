@@ -6,15 +6,46 @@ export namespace coderoast::ipc
 
 inline constexpr std::size_t kDefaultLineFramePayloadBytes{4096U};
 
+// invariant: the separator between a channel's base and its shard number in every segment name.
+inline constexpr std::string_view kShardNameMarker{"_shard_"};
+
 // invariant: both ends derive a shard's segment name from (base, shard_id) here; a second
 // definition would silently open two different segments.
 // post: `<base>_shard_<shard_id>`, the one segment name both processes agree on.
 [[nodiscard]] inline std::string shard_channel_name(std::string_view base, std::size_t shard_id)
 {
     std::string name{base};
-    name += "_shard_";
+    name += kShardNameMarker;
     name += std::to_string(shard_id);
     return name;
+}
+
+struct ShardChannelName
+{
+    std::string_view base;
+    std::size_t shard_id{0};
+
+    [[nodiscard]] bool operator==(const ShardChannelName&) const = default;
+};
+
+// post: the (base, shard_id) shard_channel_name spelled `segment` from, or nullopt when no pair
+// spells it: a missing marker, or a signed, padded, overflowing or trailing-text number.
+// note: base views `segment`, so it lives exactly as long as the caller's text.
+[[nodiscard]] inline std::optional<ShardChannelName>
+parse_shard_channel_name(std::string_view segment) noexcept
+{
+    const auto marker{segment.rfind(kShardNameMarker)};
+    if (marker == std::string_view::npos)
+        return std::nullopt;
+    const std::string_view digits{segment.substr(marker + kShardNameMarker.size())};
+    if (digits.empty() || (digits.size() > 1U && digits.front() == '0'))
+        return std::nullopt;
+    std::size_t shard_id{0};
+    const char* const last{digits.data() + digits.size()};
+    const auto [end, error]{std::from_chars(digits.data(), last, shard_id)};
+    if (error != std::errc{} || end != last)
+        return std::nullopt;
+    return ShardChannelName{.base = segment.substr(0, marker), .shard_id = shard_id};
 }
 
 // note: uint16_t pairs with LineFrameHeader::reserved to keep the header padding-free.
