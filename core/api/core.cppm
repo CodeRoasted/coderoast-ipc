@@ -405,8 +405,8 @@ struct SharedChannelHeader
     std::uint64_t slot_size{0};
 
     // refs: ADR-22.D4
-    // invariant: channel-level and never per-frame; written once at create(), read once at open();
-    // all-zero means Unspecified.
+    // invariant: channel-level and never per-frame, written once at create(); all-zero means
+    // Unspecified.
     std::array<char, kIntentChannelNameCapacity> intent_channel{};
 
     // refs: DN-103.D29
@@ -722,6 +722,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     // slot count disagrees with this build's: both ends instantiate one Frame, or neither opens.
     // post: throws std::runtime_error when the header's slot count maps any size but the segment's,
     // so no header indexes past the mapping.
+    // post: throws std::runtime_error when intent_channel holds no NUL within its field.
     [[nodiscard]] static SharedMemorySpscChannel
     open(std::string_view name, BackpressurePolicy backpressure = BackpressurePolicy::Block,
          WaitStrategy wait_strategy = WaitStrategy::Adaptive)
@@ -765,8 +766,11 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return {};
         }
-        // assert: NUL-terminated by construction — create() refuses a name that fills it.
-        return std::string_view{header_->intent_channel.data()};
+        // invariant: bounded by the field, never by a NUL: the header is memory another process
+        // writes, so a terminator open() saw may be gone at this read.
+        const auto& field{header_->intent_channel};
+        return std::string_view{
+            field.data(), static_cast<std::size_t>(std::ranges::find(field, '\0') - field.begin())};
     }
 
     [[nodiscard]] const std::string& name() const noexcept
@@ -1050,6 +1054,13 @@ template <FrameLike Frame> class SharedMemorySpscChannel
             header_->slot_size != sizeof(Frame) || slot_count_ == 0U)
         {
             throw std::runtime_error("IPC shared-memory channel header is incompatible");
+        }
+        if (std::ranges::find(header_->intent_channel, '\0') == header_->intent_channel.end())
+        {
+            throw std::runtime_error(std::format(
+                "IPC shared-memory channel '{}' header's intent_channel holds no NUL within its "
+                "{} B field",
+                name_, kIntentChannelNameCapacity));
         }
         const auto expected{segment_bytes(slot_count_)};
         if (!expected.has_value() || *expected != map_size_)

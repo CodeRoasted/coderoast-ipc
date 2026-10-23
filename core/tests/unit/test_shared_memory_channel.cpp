@@ -250,6 +250,86 @@ TEST(SharedMemoryChannel, OpenRefusesAVersionSixHeader)
         << "a header stamped with ABI version 6 was opened by a version 7 consumer";
 }
 
+namespace
+{
+// post: the segment's intent_channel field overwritten with `fill` across its whole capacity, so it
+// holds no NUL; false when the declared `marker` is not found in the header's first page.
+// invariant: the field is located by the marker the producer wrote into it, never by a layout
+// offset the test would have to keep in step with the header.
+[[nodiscard]] bool unterminate_intent_channel(const std::string& name, std::string_view marker,
+                                              char fill)
+{
+    constexpr std::size_t kHeaderPage{4096U};
+    const auto path{"/" + name};
+    const int descriptor{::shm_open(path.c_str(), O_RDWR, 0)};
+    if (descriptor < 0)
+    {
+        return false;
+    }
+    std::array<char, kHeaderPage> page{};
+    const auto read_bytes{::pread(descriptor, page.data(), page.size(), 0)};
+    const std::string_view header{page.data(),
+                                  read_bytes > 0 ? static_cast<std::size_t>(read_bytes) : 0U};
+    const auto offset{header.find(marker)};
+    bool written{false};
+    if (offset != std::string_view::npos)
+    {
+        const std::string unterminated(coderoast::ipc::kIntentChannelNameCapacity, fill);
+        written =
+            ::pwrite(descriptor, unterminated.data(), unterminated.size(),
+                     static_cast<::off_t>(offset)) == static_cast<::ssize_t>(unterminated.size());
+    }
+    static_cast<void>(::close(descriptor));
+    return written;
+}
+} // namespace
+
+// refs: ADR-22.D4
+// invariant: a corrupt or foreign header whose intent_channel fills its field with no NUL is
+// refused at open(), never read as a name that runs into the next field.
+TEST(SharedMemoryChannel, OpenRefusesAnUnterminatedIntentChannel)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    const auto name{unique_channel("intent_unterminated")};
+    const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+        .name = name, .slot_count = 4, .intent_channel = "marker-intent", .seal_grid = kAnyGrid})};
+    ASSERT_TRUE(unterminate_intent_channel(name, "marker-intent", 'x'))
+        << "the declared intent_channel was not found in the header of '" << name << "'";
+
+    EXPECT_THROW(
+        {
+            const auto consumer{Channel::open(name)};
+            ADD_FAILURE() << "open() accepted an unterminated intent_channel and read it as '"
+                          << consumer.intent_channel() << "' (" << consumer.intent_channel().size()
+                          << " B, field capacity " << coderoast::ipc::kIntentChannelNameCapacity
+                          << " B)";
+        },
+        std::runtime_error);
+}
+
+// refs: ADR-22.D4
+// invariant: the header lives in memory another process writes, so a NUL present at open() may be
+// gone at the next read; every read stays inside the field whatever the field holds.
+TEST(SharedMemoryChannel, AnIntentChannelReadStaysInsideItsField)
+{
+    using Channel = coderoast::ipc::SharedMemorySpscChannel<Frame>;
+    const auto name{unique_channel("intent_bounded")};
+    // invariant: a grid with no zero byte at its start, so a read past the field finds no NUL
+    // there.
+    constexpr coderoast::ipc::SealGrid kNoLeadingZero{
+        .origin_unix_ns = 0x0101010101010101U, .window_length_ns = 1U, .frontier_step_ns = 1U};
+    const auto producer{Channel::create(coderoast::ipc::ChannelConfig{
+        .name = name, .slot_count = 4, .intent_channel = "bounded", .seal_grid = kNoLeadingZero})};
+    const auto consumer{Channel::open(name)};
+    ASSERT_EQ(consumer.intent_channel(), "bounded");
+    ASSERT_TRUE(unterminate_intent_channel(name, "bounded", 'y'))
+        << "the declared intent_channel was not found in the header of '" << name << "'";
+
+    EXPECT_LE(consumer.intent_channel().size(), coderoast::ipc::kIntentChannelNameCapacity)
+        << "the read returned " << consumer.intent_channel().size() << " B from a "
+        << coderoast::ipc::kIntentChannelNameCapacity << " B field";
+}
+
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
