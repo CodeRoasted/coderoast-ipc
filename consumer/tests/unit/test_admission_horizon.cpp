@@ -188,10 +188,11 @@ class MiniatureRun
         Buffer buffer{drainer};
         Run result;
         {
-            std::vector<std::jthread> threads;
+            std::vector<std::function<void()>> tasks;
             for (std::uint32_t shard{0}; shard < kShards; ++shard)
-                threads.emplace_back([this, shard] { produce(shard); });
-            threads.emplace_back([this] { publish_frontier(); });
+                tasks.emplace_back([this, shard] { produce(shard); });
+            tasks.emplace_back([this] { publish_frontier(); });
+            const coderoast::ipc::test::ThreadGroup threads{std::move(tasks)};
 
             const auto deadline{Clock::now() + bound};
             Frame frame{};
