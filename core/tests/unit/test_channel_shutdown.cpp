@@ -404,3 +404,33 @@ TEST(ChannelShutdown, ClosingBeforeClosingAtIsPublishedIsNotClosed)
         << "the pop promoted the state to " << static_cast<int>(ch.consumer.state())
         << " before closing_at was published";
 }
+
+// invariant: a Block push on a full ring nobody pops stays inside push_status until a close, so the
+// push is held mid-flight with no sleep and no timing.
+// assert: close_graceful with that push in flight aborts in a build without NDEBUG — a graceful
+// close never overlaps a push, and close_abort is the wake for a producer blocked in push.
+TEST(ChannelShutdownDeathTest, CloseGracefulWithAPushInFlightAborts)
+{
+#ifdef NDEBUG
+    GTEST_SKIP() << "the in-flight check compiles out under NDEBUG; a debug profile runs this arm";
+#else
+    ScopedChannel ch{"graceful_overlaps_push", /*slot_count=*/1U};
+    ASSERT_EQ(ch.producer.try_push_status(make_frame(1)), coderoast::ipc::PushStatus::Ok);
+    ASSERT_EQ(ch.producer.pushes_in_flight(), 0U);
+
+    EXPECT_DEATH(
+        {
+            std::thread pusher{[&ch]() noexcept
+                               { static_cast<void>(ch.producer.push_status(make_frame(2))); }};
+            while (ch.producer.pushes_in_flight() == 0U)
+            {
+                std::this_thread::yield();
+            }
+            ch.producer.close_graceful();
+            pusher.join();
+        },
+        "close_graceful on channel '.*' ran with 1 push\\(es\\) in flight through the same handle");
+    EXPECT_EQ(ch.producer.state(), coderoast::ipc::ChannelState::Open)
+        << "the child's close reached this process's segment state before its abort";
+#endif
+}

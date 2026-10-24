@@ -583,6 +583,80 @@ class AdaptiveWait
     std::uint64_t loops_{0};
 };
 
+// note: a module's in-class bodies are not implicitly inline; push inlines these only so.
+// NOLINTBEGIN(readability-redundant-inline-specifier)
+// invariant: counts the pushes running through one handle in a build without NDEBUG; under NDEBUG
+// it holds nothing and every member is a no-op, so the shipped push carries no counter.
+// invariant: process-local and per handle — it sees the pushes of this handle, never a close
+// issued through another handle or from another process.
+class PushesInFlight
+{
+  public:
+#ifdef NDEBUG
+    inline void enter() noexcept {}
+    inline void leave() noexcept {}
+    inline void require_none(std::string_view /*channel*/) const noexcept {}
+#else
+    inline void enter() noexcept
+    {
+        count_.fetch_add(1U, std::memory_order_seq_cst);
+    }
+    inline void leave() noexcept
+    {
+        count_.fetch_sub(1U, std::memory_order_seq_cst);
+    }
+    [[nodiscard]] inline std::uint32_t count() const noexcept
+    {
+        return count_.load(std::memory_order_seq_cst);
+    }
+    // post: returns when no push is in flight through this handle; otherwise prints the breach to
+    // stderr and aborts, since a frame landing beside a graceful close is one the closer never saw.
+    inline void require_none(std::string_view channel) const noexcept
+    {
+        const auto in_flight{count()};
+        if (in_flight == 0U) [[likely]]
+        {
+            return;
+        }
+        std::cerr << std::format(
+            "FATAL IPC close invariant breach: close_graceful on channel '{}' ran with {} push(es) "
+            "in flight through the same handle; a graceful close runs only once no push is in "
+            "flight, and close_abort is the wake for a producer blocked in push\n",
+            channel, in_flight);
+        std::abort();
+    }
+
+  private:
+    std::atomic<std::uint32_t> count_{0};
+#endif
+};
+
+#ifdef NDEBUG
+static_assert(std::is_empty_v<PushesInFlight>);
+#endif
+
+// post: the guarded handle counts one more push in flight for this scope's life.
+class PushInFlightScope
+{
+  public:
+    inline explicit PushInFlightScope(PushesInFlight& pushes) noexcept : pushes_{pushes}
+    {
+        pushes_.enter();
+    }
+    PushInFlightScope(const PushInFlightScope&) = delete;
+    PushInFlightScope& operator=(const PushInFlightScope&) = delete;
+    PushInFlightScope(PushInFlightScope&&) = delete;
+    PushInFlightScope& operator=(PushInFlightScope&&) = delete;
+    inline ~PushInFlightScope() noexcept
+    {
+        pushes_.leave();
+    }
+
+  private:
+    PushesInFlight& pushes_;
+};
+// NOLINTEND(readability-redundant-inline-specifier)
+
 } // namespace coderoast::ipc
 
 export namespace coderoast::ipc
@@ -867,8 +941,11 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return state() == ChannelState::Aborted;
     }
 
-    // post: idempotent, non-blocking, callable from any thread; later pushes return Closed, and it
-    // cannot downgrade an Aborted channel.
+    // pre: no push is in flight on this channel — a caller joins every pushing thread first, and a
+    // producer blocked in push is woken by close_abort, never by this.
+    // assert: a build without NDEBUG aborts when a push through this handle is in flight.
+    // post: idempotent and non-blocking; later pushes return Closed, and it cannot downgrade an
+    // Aborted channel.
     // invariant: only the CAS winner stores closing_at, so a pop can see Closing while closing_at
     // still reads kClosingAtUnpublished; try_pop_status answers that window with Empty.
     void close_graceful() noexcept
@@ -877,6 +954,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         {
             return;
         }
+        pushes_in_flight_.require_none(name_);
         std::uint8_t expected{static_cast<std::uint8_t>(ChannelState::Open)};
         if (header_->state.compare_exchange_strong(
                 expected, static_cast<std::uint8_t>(ChannelState::Closing),
@@ -886,12 +964,13 @@ template <FrameLike Frame> class SharedMemorySpscChannel
                 header_->write_sequence.value.load(std::memory_order_acquire),
                 std::memory_order_release);
         }
-        // assert: a producer parked in push() under Block must see the state change and exit.
         notify_state_change();
     }
 
+    // refs: DN-103.D30
     // post: terminal; every parked thread wakes and frames already in the ring may still be popped.
-    // Callable from any thread.
+    // invariant: callable from any thread, a push in flight included — the declared lossy wake of a
+    // producer blocked in push.
     void close_abort() noexcept
     {
         if (header_ == nullptr)
@@ -905,6 +984,7 @@ template <FrameLike Frame> class SharedMemorySpscChannel
 
     [[nodiscard]] PushStatus try_push_status(const Frame& frame) noexcept
     {
+        const PushInFlightScope in_flight{pushes_in_flight_};
         const auto _state{state()};
         if (_state == ChannelState::Aborted)
         {
@@ -921,10 +1001,11 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         return PushStatus::Ok;
     }
 
-    // post: under Block, waits on the configured WaitStrategy and is cancellable by
-    // close_graceful() or close_abort().
+    // post: under Block, waits on the configured WaitStrategy and is cancellable by close_abort();
+    // close_graceful() never runs while it is in flight.
     [[nodiscard]] PushStatus push_status(const Frame& frame) noexcept
     {
+        const PushInFlightScope in_flight{pushes_in_flight_};
         if (policy_ == BackpressurePolicy::DropNewest)
         {
             return try_push_status(frame);
@@ -997,6 +1078,15 @@ template <FrameLike Frame> class SharedMemorySpscChannel
         // store is still landing, and the next call sees it.
         return PopStatus::Empty;
     }
+
+#ifndef NDEBUG
+    // post: the pushes running through this handle now; it exists only in a build without NDEBUG,
+    // where it lets a test hold a push in flight before it closes.
+    [[nodiscard]] std::uint32_t pushes_in_flight() const noexcept
+    {
+        return pushes_in_flight_.count();
+    }
+#endif
 
     // post: false conflates Full, Closed and Aborted; try_push_status() tells them apart.
     [[nodiscard]] bool try_push(const Frame& frame) noexcept
@@ -1195,6 +1285,9 @@ template <FrameLike Frame> class SharedMemorySpscChannel
     WaitStrategy wait_strategy_{WaitStrategy::Adaptive};
     SegmentIdentity identity_{};
     bool is_producer_{false};
+    // invariant: never moved — a handle moved while a push runs through it is already a race, so
+    // each handle starts at zero.
+    [[no_unique_address]] PushesInFlight pushes_in_flight_{};
 };
 
 } // namespace coderoast::ipc

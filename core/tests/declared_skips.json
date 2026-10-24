@@ -1,0 +1,9 @@
+[
+ {"test": "ChannelShutdownDeathTest.CloseGracefulWithAPushInFlightAborts",
+  "outcome": "skipped",
+  "profiles": ["linux-clang21-libcxx-release", "linux-clang21-libcxx-arm64-release",
+               "linux-gcc16-release", "linux-gcc16-arm64-release"],
+  "condition": "NDEBUG: every release profile defines it",
+  "why": "the in-flight push check close_graceful asserts compiles out under NDEBUG, so the abort this arm expects exists only on the debug and sanitizer profiles, which run it",
+  "refs": ["DN-103.D30", "DN-142.D23"]}
+]
