@@ -22,6 +22,8 @@ The honest subtlety: a multi-shard shared-memory transport is *physically* racy,
 - Per-window frame membership and the data-before-seal ordering within each window are reconciled and reproducible.
 - `WindowClosedConsumer` collapses the per-shard seals into exactly one `WindowClosed` event per window, so the **set and count of closed windows are fixed** for a given replay — never a function of transport timing.
 
+**The guarantee holds for a lossless run, and only that.** Under `DropNewest` a full ring discards the frame being written, so *which* frames survive depends on how the scheduler paced producer and consumer. Such a run is never determinism evidence: every determinism witness reads the consumer's `dropped_frames()` and refuses a run where it is non-zero, and LogCraft refuses `DropNewest` outright in deterministic mode (`ADR-11.D4`).
+
 The racy interleave is **quarantined to the raw transport and never observed by application code**; everything the causal merge reconciles is a guarantee you can build on. Restoring determinism across that concurrent boundary *is* the point of this library.
 
 ---
@@ -421,7 +423,7 @@ default `kWindowDuration` is 25 s in `coderoast-server`) so that one
 ### Backpressure Strategies
 
 - **Block:** Sender waits until space available (fairness, bounded latency)
-- **DropNewest:** Reject new writes if full (low-latency producers)
+- **DropNewest:** Reject new writes if full (low-latency producers). Lossy by design: each drop is counted (`ChannelStats::dropped`, summed over shards by the consumer's `dropped_frames()`), and a run that dropped anything is never determinism evidence — see [Determinism](#determinism).
 
 There is deliberately no overwrite-oldest policy. Such a policy requires the PRODUCER to
 advance the CONSUMER's read cursor, which breaks the single-writer-per-variable invariant

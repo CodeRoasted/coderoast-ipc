@@ -125,3 +125,42 @@ TEST(DrainerObserver, FiresOnShardEosTransition)
     EXPECT_EQ(eos_shards[0], 1U);
     EXPECT_EQ(eos_shards[1], 0U);
 }
+
+// refs: ADR-11.D4
+// note: a witness reads one number to refuse a lossy run, so it must sum every shard's drops.
+TEST(ShmTransportDrainer, DroppedFramesSumEveryShardsDropNewestCount)
+{
+    constexpr std::size_t kSlots{2U};
+    constexpr std::size_t kShards{2U};
+    const auto base{unique_channel("dropped")};
+    std::vector<Channel> producers;
+    producers.reserve(kShards);
+    for (std::size_t shard_id{0}; shard_id < kShards; ++shard_id)
+    {
+        producers.emplace_back(Channel::create(coderoast::ipc::ChannelConfig{
+            .name = coderoast::ipc::shard_channel_name(base, shard_id),
+            .slot_count = kSlots,
+            .backpressure = coderoast::ipc::BackpressurePolicy::DropNewest,
+            .seal_grid = kOpenGrid,
+        }));
+    }
+    Drainer drainer{Drainer::Config{.channel = base, .shard_count = kShards}};
+    Consumer consumer{Consumer::Config{.channel = base, .shard_count = kShards}};
+    EXPECT_EQ(drainer.dropped_frames(), 0U) << "a run that dropped nothing reads as lossy";
+
+    for (std::uint64_t sequence{1}; sequence <= 5U; ++sequence)
+    {
+        (void)producers[0].push(make_frame(sequence, 0, "a"));
+    }
+    for (std::uint64_t sequence{1}; sequence <= 3U; ++sequence)
+    {
+        (void)producers[1].push(make_frame(sequence, 1, "b"));
+    }
+
+    const auto stats{drainer.channel_stats()};
+    EXPECT_EQ(drainer.dropped_frames(), 4U)
+        << "shard 0 dropped " << stats[0].dropped << " of 5 into " << kSlots
+        << " slots, shard 1 dropped " << stats[1].dropped << " of 3";
+    EXPECT_EQ(consumer.dropped_frames(), drainer.dropped_frames())
+        << "the causal consumer reports another drop count than its transport";
+}

@@ -316,6 +316,19 @@ class ShmTransportDrainer
         return out;
     }
 
+    // refs: ADR-11.D4
+    // post: the frames every shard's producer dropped under DropNewest, read off the shared
+    // headers; a run with any is never determinism evidence.
+    [[nodiscard]] std::uint64_t dropped_frames() const noexcept
+    {
+        std::uint64_t dropped{0};
+        for (const auto& chan : channels_)
+        {
+            dropped += chan.stats().dropped;
+        }
+        return dropped;
+    }
+
     [[nodiscard]] DrainerMetrics metrics() const noexcept
     {
         return DrainerMetrics{
@@ -840,6 +853,13 @@ class CausalShmConsumer
         return drainer_.channel_stats();
     }
 
+    // refs: ADR-11.D4
+    // post: the transport's dropped_frames(): non-zero refuses the run as determinism evidence.
+    [[nodiscard]] std::uint64_t dropped_frames() const noexcept
+    {
+        return drainer_.dropped_frames();
+    }
+
     [[nodiscard]] std::vector<ShardSummary> shard_summaries() const
     {
         return buffer_.shard_summaries();
@@ -1007,6 +1027,13 @@ class WindowClosedConsumer
     [[nodiscard]] std::uint64_t seals_observed() const noexcept
     {
         return seals_observed_;
+    }
+
+    // refs: ADR-11.D4
+    // post: the transport's dropped_frames(): non-zero refuses the run as determinism evidence.
+    [[nodiscard]] std::uint64_t dropped_frames() const noexcept
+    {
+        return underlying_.dropped_frames();
     }
 
     // post: the count of windows reclaimed WITHOUT closing — declared, never absorbed.
