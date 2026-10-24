@@ -37,7 +37,12 @@ parse_shard_channel_name(std::string_view segment) noexcept
     const auto marker{segment.rfind(kShardNameMarker)};
     if (marker == std::string_view::npos)
         return std::nullopt;
-    const std::string_view digits{segment.substr(marker + kShardNameMarker.size())};
+    // note: rfind bounds both cuts; substr's out_of_range edge would escape this noexcept frame.
+    // refs: ADR-26.D9
+    std::string_view digits{segment};
+    digits.remove_prefix(marker + kShardNameMarker.size());
+    std::string_view base{segment};
+    base.remove_suffix(segment.size() - marker);
     if (digits.empty() || (digits.size() > 1U && digits.front() == '0'))
         return std::nullopt;
     std::size_t shard_id{0};
@@ -45,7 +50,7 @@ parse_shard_channel_name(std::string_view segment) noexcept
     const auto [end, error]{std::from_chars(digits.data(), last, shard_id)};
     if (error != std::errc{} || end != last)
         return std::nullopt;
-    return ShardChannelName{.base = segment.substr(0, marker), .shard_id = shard_id};
+    return ShardChannelName{.base = base, .shard_id = shard_id};
 }
 
 // note: uint16_t pairs with LineFrameHeader::reserved to keep the header padding-free.
