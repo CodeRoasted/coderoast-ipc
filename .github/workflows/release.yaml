@@ -34,12 +34,12 @@ jobs:
   # `runs-on`). `BUILD_RECORD_READ_TOKEN` is a fine-grained PAT whose only grant is
   # `Actions: Read-only` on CodeRoasted/coderoast.
   attest:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@981a37c09c754109a465f61976758e353702ce15
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-attest.yml@a356edfeb487ded2ef4b1cdb91487b191998305b
     secrets:
       BUILD_RECORD_READ_TOKEN: ${{ secrets.BUILD_RECORD_READ_TOKEN }}
 
   publish:
     needs: attest
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-publish.yml@981a37c09c754109a465f61976758e353702ce15
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-publish.yml@a356edfeb487ded2ef4b1cdb91487b191998305b
     with:
       record-sha256: ${{ needs.attest.outputs.record-sha256 }}
