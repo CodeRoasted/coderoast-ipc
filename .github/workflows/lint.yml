@@ -11,4 +11,4 @@ permissions:
 
 jobs:
   lint:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@a356edfeb487ded2ef4b1cdb91487b191998305b
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-lint.yml@6922556c4e76dc0755ced2f1aa90c9eccfcc462f
