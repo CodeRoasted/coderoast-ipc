@@ -9,7 +9,7 @@ required_conan_version = ">=2.28"
 
 class CodeRoastIpcNamespaceTestsConan(ConanFile):
     name = "coderoast_ipc_namespace_tests"
-    version = "1.10.8"
+    version = "1.10.9"
     # DN-142.D29 (ix): the core's segment arms that mount a private tmpfs in a fresh user, pid and
     # mount namespace, which no Landlock domain allows. A test-only package declared `unconfined:` in
     # packages.yml and built against the STORED coderoast_ipc_core, so the core's own create stays
@@ -20,7 +20,7 @@ class CodeRoastIpcNamespaceTestsConan(ConanFile):
                    "stored core (DN-142.D29 (ix)). Never published.")
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "CMakeLists.txt", "tests/*"
-    requires = "coderoast_ipc_core/1.10.8"
+    requires = "coderoast_ipc_core/1.10.9"
 
     def export_sources(self):
         # The export is the TRACKED files under exports_sources, never the disk's (DN-142.D4 (b)):
