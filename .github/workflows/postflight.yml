@@ -1,0 +1,17 @@
+name: Postflight
+
+# clang-tidy over a dev build ALREADY IN PLACE (malf-toolchain's coderoast-postflight.yml). It builds
+# nothing and REFUSES without that build, so on this public repository's hosted machines it refuses by
+# design: here the postflight runs inside CI's build job (`postflight: true`), the one job that holds the
+# build. Dispatched alone, it serves a persistent runner that still holds one.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  postflight:
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-postflight.yml@a8d596aee066f6c35af4c704b1f55a1bdc3d410d
