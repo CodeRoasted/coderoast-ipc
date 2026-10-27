@@ -13,4 +13,4 @@ permissions:
 
 jobs:
   preflight:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-preflight.yml@5a4c5ef31a0250878f7fc88ef175f30cb0368b3a
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-preflight.yml@7caf5e6175e90666068fb153d037b8de50cdcdf7
