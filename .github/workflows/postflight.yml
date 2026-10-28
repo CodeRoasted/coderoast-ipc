@@ -14,4 +14,4 @@ permissions:
 
 jobs:
   postflight:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-postflight.yml@b54dd5053a3d5be5d7c498a0dc5962798b88196a
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-postflight.yml@76162212dd3984673d1af23a41c19d9c020eb723
