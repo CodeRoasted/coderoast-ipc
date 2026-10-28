@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   present:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate-present.yml@89e834cc27061a3a031b475922b1e01af3ccb936
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate-present.yml@b54dd5053a3d5be5d7c498a0dc5962798b88196a
     permissions:
       contents: read
       actions: read
@@ -44,7 +44,7 @@ jobs:
   store:
     needs: [present, ci]
     if: ${{ needs.present.outputs.present != 'true' }}
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate.yml@89e834cc27061a3a031b475922b1e01af3ccb936
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate.yml@b54dd5053a3d5be5d7c498a0dc5962798b88196a
     permissions:
       contents: read
       actions: read
