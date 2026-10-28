@@ -1,0 +1,53 @@
+name: Candidate
+
+# This repository's candidate (DN-142.D31, the Founder's per-repository CI): whether its own store
+# already holds this commit's candidate (`present`, the no-op: nothing else starts), else its CI with
+# the postflight (`ci`: preflight, the clang dev leg in the image, clang-tidy over it) and then the store
+# job (`store`: the gcc ship form of every released package, bound to the clang verdicts by equal
+# inputs, pushed to ghcr.io/<owner>/store-coderoast-ipc and attested, the index last). PUBLIC
+# repository: every job runs on GitHub-hosted machines, and every identity is derived from the run, so
+# a fork runs the same candidate over its own store (P7).
+#
+# THIS FILE'S PRESENCE IS WHAT MAKES THE REPOSITORY OWN ITS STORE (store_transport.py `owns-store`): the
+# store package's visibility rule reads "public and linked to coderoast-ipc" from the commit that adds it.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  present:
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate-present.yml@96c839e1d19c921d2bd2c3cb57e9c7a94297d0f7
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      attestations: read
+
+  ci:
+    needs: present
+    if: ${{ needs.present.outputs.present != 'true' }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      postflight: true
+    permissions:
+      contents: read
+      actions: read
+
+  store:
+    needs: [present, ci]
+    if: ${{ needs.present.outputs.present != 'true' }}
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-candidate.yml@96c839e1d19c921d2bd2c3cb57e9c7a94297d0f7
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
