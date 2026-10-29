@@ -40,6 +40,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      packages: read
 
   store:
     needs: [present, ci]

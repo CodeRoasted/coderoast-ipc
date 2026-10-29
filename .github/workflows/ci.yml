@@ -24,6 +24,7 @@ on:
 permissions:
   contents: read
   actions: read   # malf's conan cache restore reads this job's runner group (actions-cache-allowed.sh)
+  packages: read       # coderoast-build.yml reads a private upstream's store with this token
 
 jobs:
   preflight:
