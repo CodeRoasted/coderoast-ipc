@@ -32,3 +32,21 @@ packages:
     depends: [coderoast_ipc_core]
     unconfined:
       why: "every test here mounts a private tmpfs at /dev/shm inside a fresh user, pid and mount namespace, and a Landlock domain forbids any mount-topology change, even one granting the whole filesystem (DN-142.D29, verified with landlock_sandbox.py)"
+
+# ── The deterministic-content core the determinism gates judge (malf determinism_lint.py) ────────
+# Both gates — the clock (the determinism bible §7) and std <random> (§5 M7/M9) — judge every C/C++
+# unit under `roots:`, one subject and one root list; every build target above that no root reaches
+# is named under `out_of_scope:` with its reason. malf's coderoast-preflight.yml runs them over this
+# repository; the superproject sums the `opt_outs:` budgets across repositories (DN-142.D33).
+determinism:
+  # The determinism bible §6 draws the line INSIDE this repository: the RAW pre-reconciliation
+  # interleave is a DECLARED RACE these gates assert nothing about; what the causal merge reconstructs
+  # from CONTENT is deterministic content, so the four non-test roots are in scope. Not a licence to
+  # read the clock for liveness: a spin-wait timeout is still a wall-clock read.
+  roots:
+    - core/src
+    - core/api
+    - producer/api
+    - consumer/api
+  out_of_scope:
+    coderoast_ipc_namespace_tests: "a test-only package (release: false, DN-142.D29 (ix)) holding the core's mount-namespace segment arms, built against the stored core: it ships nothing, so nothing it does reaches a consumer of deterministic output"

@@ -1,8 +1,8 @@
 name: Preflight
 
 # The cheap checks of this repository, nothing built: actionlint, C++23 module conformance, clang-format
-# conformance and the dead-symbol-in-comment gate (malf-toolchain's coderoast-preflight.yml, every leg
-# armed). Dispatched alone, or called by CI.
+# conformance, the two determinism gates over the core packages.yml declares, and the dead-symbol-in-
+# comment gate (malf-toolchain's coderoast-preflight.yml, every leg armed). Dispatched alone, or called by CI.
 
 on:
   workflow_dispatch:
