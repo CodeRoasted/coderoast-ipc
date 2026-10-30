@@ -31,7 +31,7 @@ jobs:
     uses: ./.github/workflows/preflight.yml
 
   build:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-build.yml@cd9c2a0b980e656d297e528f0c0e6142dbcc0fcc
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-build.yml@4a570ef5d4964ddd9e31b45581d16ec974eec8c5
     with:
       postflight: ${{ inputs.postflight }}
 

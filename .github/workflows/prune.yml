@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   prune:
-    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-prune.yml@cd9c2a0b980e656d297e528f0c0e6142dbcc0fcc
+    uses: CodeRoasted/malf-toolchain/.github/workflows/coderoast-prune.yml@4a570ef5d4964ddd9e31b45581d16ec974eec8c5
     permissions:
       contents: read
       actions: read
