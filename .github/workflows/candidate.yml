@@ -8,8 +8,9 @@ name: Candidate
 # repository: every job runs on GitHub-hosted machines, and every identity is derived from the run, so
 # a fork runs the same candidate over its own store (P7).
 #
-# THIS FILE'S PRESENCE IS WHAT MAKES THE REPOSITORY OWN ITS STORE (store_transport.py `owns-store`): the
-# store package's visibility rule reads "public and linked to coderoast-ipc" from the commit that adds it.
+# THE REPOSITORY OWNS ITS STORE (DN-142.D31 (3)): its store package has the repository's own visibility and is
+# linked to it — "public and linked to coderoast-ipc" — and malf's store transport refuses a write to a package that
+# breaks that rule (store_replica.py `expected_package`).
 
 on:
   workflow_dispatch:
