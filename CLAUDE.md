@@ -15,7 +15,7 @@ test that mounts belongs there, never in a confined package.
   (`core/`, `producer/`, `consumer/`).
 - The determinism contract — raw transport deliberately racy, the consumer's
   causal merge restores bit-identity — is stated authoritatively in
-  `README.md § Determinism`; the root CLAUDE.md carve-out is its digest.
+  `README.md § Determinism`; `malf/doctrine.md` § Determinism & replay is its digest.
 
 ## Constraints & traps
 
@@ -26,3 +26,7 @@ test that mounts belongs there, never in a confined package.
   change cascades — fix all consumers in the same pass; the consumer list is the
   superproject's `technical_docs/compatibility_matrix.md` (present only in a
   full workspace checkout).
+
+## The C++ doctrine
+
+@../malf/doctrine.md
