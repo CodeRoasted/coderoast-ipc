@@ -163,6 +163,78 @@ TEST(CausalReorderBuffer, PerWindowSealOrderIsDeterministicByShardNotTransportSe
            "reconciled stream is no longer a deterministic byte sequence";
 }
 
+// refs: ADR-11.D3
+// assert: agent 0's first record on a window boundary T carries a seal's (T, 0, 0), and it orders
+// after every shard's seal at T, since a frame stamped at window K+1's first instant is in K+1.
+// note: with no frame class in the key, shard 0's seal and that frame tied and the merge aborted.
+TEST(CausalReorderBuffer, ADataFrameOnASealTickOrdersAfterEverySealAtThatTick)
+{
+    constexpr std::uint64_t kBoundary{1000};
+    constexpr std::size_t kShards{2};
+    ProducerHarness producers{"seal_tick_data", kShards};
+    Drainer drainer{Drainer::Config{.channel = producers.base, .shard_count = kShards}};
+    Buffer buffer{drainer};
+
+    (void)producers.producers[0].push(
+        make_frame(1, 0, "", kBoundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    (void)producers.producers[0].push(make_frame(2, 0, "agent0-first", kBoundary, 0, 0));
+    (void)producers.producers[1].push(
+        make_frame(3, 1, "", kBoundary, 0, 0, Flags::kLineFrameFlagWindowSeal));
+    producers.producers[0].close_graceful();
+    producers.producers[1].close_graceful();
+
+    std::vector<std::string> emitted;
+    Frame out{};
+    for (int attempt{0}; attempt < 16 && emitted.size() < 3U; ++attempt)
+    {
+        if (buffer.try_select(out))
+        {
+            const bool seal{
+                coderoast::ipc::has_flag(out.header.flags, Flags::kLineFrameFlagWindowSeal)};
+            emitted.push_back((seal ? std::string{"seal@"} : "data(" + payload_of(out) + ")@") +
+                              std::to_string(out.header.shard_id));
+        }
+    }
+
+    const std::vector<std::string> expected{"seal@0", "seal@1", "data(agent0-first)@0"};
+    EXPECT_EQ(emitted, expected)
+        << "a data frame at a seal's (tick, 0, 0) must follow every shard's seal at that tick";
+}
+
+// refs: ADR-11.D3
+// assert: the class is read from the WindowSeal flag, and at an equal tick a seal precedes a data
+// frame in either shard order; a seal against a non-zero agent_order or index compares as before.
+TEST(CausalKey, TheFrameClassFollowsTheTickAndIsReadFromTheSealFlag)
+{
+    using coderoast::ipc::consumer::extract_causal_key;
+    using coderoast::ipc::consumer::FrameClass;
+    using coderoast::ipc::consumer::key_less;
+    constexpr std::uint64_t kTick{1000};
+
+    const auto seal_0{
+        extract_causal_key(make_frame(1, 0, "", kTick, 0, 0, Flags::kLineFrameFlagWindowSeal))};
+    const auto seal_1{
+        extract_causal_key(make_frame(2, 1, "", kTick, 0, 0, Flags::kLineFrameFlagWindowSeal))};
+    const auto data_0{extract_causal_key(make_frame(3, 0, "d", kTick, 0, 0))};
+    const auto data_1{extract_causal_key(make_frame(4, 1, "d", kTick, 0, 0))};
+    const auto data_late_agent{extract_causal_key(make_frame(5, 0, "d", kTick, 3, 0))};
+    const auto data_earlier_tick{extract_causal_key(make_frame(6, 1, "d", kTick - 1U, 0, 0))};
+
+    EXPECT_EQ(seal_0.frame_class, FrameClass::kSeal) << "a WindowSeal frame read as data";
+    EXPECT_EQ(data_0.frame_class, FrameClass::kData) << "a frame without WindowSeal read as seal";
+
+    EXPECT_TRUE(key_less(seal_0, data_0)) << "seal@0 must precede data@0 at (1000, 0, 0)";
+    EXPECT_FALSE(key_less(data_0, seal_0)) << "data@0 must not precede seal@0 at (1000, 0, 0)";
+    EXPECT_TRUE(key_less(seal_1, data_0)) << "seal@1 must precede data@0: the class outranks shard";
+    EXPECT_FALSE(key_less(data_0, seal_1)) << "data@0 preceded seal@1 by shard_id alone";
+    EXPECT_TRUE(key_less(seal_0, data_1)) << "seal@0 must precede data@1 at (1000, 0, 0)";
+
+    EXPECT_TRUE(key_less(seal_0, seal_1)) << "seals at one tick tie-break on shard_id";
+    EXPECT_TRUE(key_less(data_0, data_1)) << "data frames at one key tie-break on shard_id";
+    EXPECT_TRUE(key_less(seal_1, data_late_agent)) << "seal against agent_order 3 reordered";
+    EXPECT_TRUE(key_less(data_earlier_tick, seal_0)) << "the tick no longer leads the key";
+}
+
 TEST(CausalReorderBuffer, DrainedRequiresAllShardsEosAndEmptyHeaps)
 {
     ProducerHarness producers{"drained", 2};

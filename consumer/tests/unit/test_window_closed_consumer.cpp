@@ -192,6 +192,68 @@ TEST(WindowClosedConsumer, DataFrameBeforeWindowClosedRespectsCausalOrder)
 }
 
 // refs: ADR-11.D3
+// assert: agent 0's first record stamped on the boundary T carries a seal's (T, 0, 0) and belongs
+// to the window T opens, so it is delivered after WindowClosed for the window T closes.
+TEST(WindowClosedConsumer, ADataFrameOnTheBoundaryTickBelongsToTheNextWindow)
+{
+    constexpr std::size_t kShardCount{2};
+    constexpr std::uint64_t kBoundary{500};
+    constexpr std::uint64_t kWindow{7};
+
+    ProducerHarness producers{"boundary_data", kShardCount};
+
+    (void)producers.producers[0].push(make_seal(1, 0, kWindow, kBoundary));
+    (void)producers.producers[0].push(make_data(2, 0, kBoundary, "agent0-first"));
+    (void)producers.producers[1].push(make_seal(3, 1, kWindow, kBoundary));
+    producers.producers[0].close_graceful();
+    producers.producers[1].close_graceful();
+
+    WindowClosedConsumer consumer{WindowClosedConsumer::Config{
+        .underlying = {.channel = producers.base, .shard_count = kShardCount}}};
+
+    std::size_t windows_closed{0};
+    std::size_t data_before_close{0};
+    std::size_t data_after_close{0};
+    Frame frame{};
+    WindowClosedConsumer::WindowClosed window_closed{};
+    for (int spin{0}; spin < 5000; ++spin)
+    {
+        const auto kind{consumer.try_next(frame, window_closed)};
+        if (kind == WindowClosedConsumer::NextKind::kFrame)
+        {
+            if (windows_closed == 0U)
+            {
+                ++data_before_close;
+            }
+            else
+            {
+                ++data_after_close;
+            }
+            continue;
+        }
+        if (kind == WindowClosedConsumer::NextKind::kWindowClosed)
+        {
+            EXPECT_EQ(window_closed.window_id, kWindow);
+            EXPECT_EQ(window_closed.logical_tick, kBoundary);
+            ++windows_closed;
+            continue;
+        }
+        if (consumer.all_shards_done())
+        {
+            break;
+        }
+    }
+
+    EXPECT_EQ(windows_closed, 1U) << "both shards sealed window " << kWindow << " at tick "
+                                  << kBoundary << "; closed " << windows_closed << " windows";
+    EXPECT_EQ(data_before_close, 0U)
+        << "the boundary frame was delivered inside window " << kWindow << ", the window it does "
+        << "not belong to";
+    EXPECT_EQ(data_after_close, 1U) << "the boundary frame must follow WindowClosed(" << kWindow
+                                    << "); delivered after it: " << data_after_close;
+}
+
+// refs: ADR-11.D3
 TEST(WindowClosedConsumer, PartialWindowsAreReclaimedWhenAShardNeverSeals)
 {
     constexpr std::size_t kShardCount{2};

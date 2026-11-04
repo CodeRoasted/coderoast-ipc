@@ -72,14 +72,29 @@ struct ConsumerEventPayload
 using ConsumerObserver = std::function<void(const ConsumerEventPayload&)>;
 
 // refs: ADR-11.D3
+// invariant: the seal/data discriminator of the causal key, read from the WindowSeal flag every
+// seal carries and never written into the header a second time.
+// invariant: a seal orders before a data frame at an equal tick: seal(K) is emitted at window K+1's
+// first instant, and a data frame stamped there belongs to window K+1.
+enum class FrameClass : std::uint8_t
+{
+    kSeal = 0,
+    kData = 1,
+};
+
+// refs: ADR-11.D3
+// invariant: the two classes never share a key — a data frame at a seal's (tick, 0, 0), agent 0's
+// first record on a window boundary, differs from it in frame_class.
 // invariant: data frames are unique on (agent_order, intra_agent_index) alone — the agent_order
 // namespaces are disjoint and the index is per-producer monotonic.
-// invariant: every shard's seal for one window carries the same (tick, 0, 0), so shard_id is a
-// reachable tie-break rather than defensive code.
+// invariant: every shard's seal for one window carries the same (tick, kSeal, 0, 0), so shard_id is
+// a reachable tie-break rather than defensive code.
 // invariant: header.sequence is the cross-shard race counter and is never in the key.
+// invariant: the default key is the least key, the watermark of a shard that delivered nothing.
 struct CausalKey
 {
     std::uint64_t logical_tick{0};
+    FrameClass frame_class{FrameClass::kSeal};
     std::uint32_t agent_order{0};
     std::uint32_t intra_agent_index{0};
     // invariant: already on the wire, so the tie-break costs no bytes; it is what lifts the merge
@@ -96,10 +111,18 @@ template <coderoast::ipc::FrameLike Frame>
     return CausalKey{
         .logical_tick = frame.header.logical_tick != 0U ? frame.header.logical_tick
                                                         : frame.header.timestamp_unix_ns,
+        .frame_class = coderoast::ipc::is_control_frame(frame.header.flags) ? FrameClass::kSeal
+                                                                            : FrameClass::kData,
         .agent_order = frame.header.agent_order,
         .intra_agent_index = frame.header.intra_agent_index,
         .shard_id = frame.header.shard_id,
     };
+}
+
+// post: the class's name as the merge's diagnostics print it.
+[[nodiscard]] constexpr std::string_view frame_class_name(FrameClass frame_class) noexcept
+{
+    return frame_class == FrameClass::kSeal ? "seal" : "data";
 }
 
 // refs: ADR-11.D3
@@ -110,6 +133,10 @@ template <coderoast::ipc::FrameLike Frame>
     if (lhs_key.logical_tick != rhs_key.logical_tick)
     {
         return lhs_key.logical_tick < rhs_key.logical_tick;
+    }
+    if (lhs_key.frame_class != rhs_key.frame_class)
+    {
+        return lhs_key.frame_class < rhs_key.frame_class;
     }
     if (lhs_key.agent_order != rhs_key.agent_order)
     {
@@ -477,11 +504,12 @@ class CausalReorderBuffer
         // assert: a shard settles by being EOS, by holding a candidate, or by a watermark key that
         // reached best's key — a WindowSeal promises nothing earlier remains on that shard.
         // note: this is what drains the final same-tick seal batch at a PlayToTarget freeze.
-        // invariant: the comparison drops shard_id — a shard can only deliver a STRICTLY greater
-        // (tick, agent_order, index) than its watermark, so the same-tick seal batch drains.
+        // invariant: the comparison drops shard_id and keeps frame_class — a shard can only deliver
+        // a STRICTLY greater positional key than its watermark, so the same-tick seal batch drains.
         const auto positional{[](const CausalKey& key) noexcept
                               {
                                   return CausalKey{.logical_tick = key.logical_tick,
+                                                   .frame_class = key.frame_class,
                                                    .agent_order = key.agent_order,
                                                    .intra_agent_index = key.intra_agent_index,
                                                    .shard_id = 0U};
@@ -658,7 +686,8 @@ class CausalReorderBuffer
         {
             const auto as_tuple{[](const CausalKey& causal_key)
                                 {
-                                    return std::tie(causal_key.logical_tick, causal_key.agent_order,
+                                    return std::tie(causal_key.logical_tick, causal_key.frame_class,
+                                                    causal_key.agent_order,
                                                     causal_key.intra_agent_index,
                                                     causal_key.shard_id);
                                 }};
@@ -667,10 +696,12 @@ class CausalReorderBuffer
                 std::cerr << "FATAL: causal merge emitted a non-increasing key — the reconciled "
                              "order is not deterministic.\n  previous: tick="
                           << last_emitted_key_.logical_tick
+                          << " frame_class=" << frame_class_name(last_emitted_key_.frame_class)
                           << " agent_order=" << last_emitted_key_.agent_order
                           << " intra_agent_index=" << last_emitted_key_.intra_agent_index
                           << " shard_id=" << last_emitted_key_.shard_id
                           << "\n  current:  tick=" << key.logical_tick
+                          << " frame_class=" << frame_class_name(key.frame_class)
                           << " agent_order=" << key.agent_order
                           << " intra_agent_index=" << key.intra_agent_index
                           << " shard_id=" << key.shard_id << '\n';

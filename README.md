@@ -18,7 +18,7 @@ The honest subtlety: a multi-shard shared-memory transport is *physically* racy,
 - The order in which per-shard `WindowSeal` frames physically land.
 
 **Consumed stream — bit-identical. Rely on these:**
-- The causal merge reorders every frame by `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)` behind a frontier/watermark gate, so the same inputs yield the same consumed order, always.
+- The causal merge reorders every frame by `CausalKey = (logical_tick, frame_class, agent_order, intra_agent_index, shard_id)` behind a frontier/watermark gate, so the same inputs yield the same consumed order, always. `frame_class` is read from the `WindowSeal` flag, and a seal orders before a data frame at an equal tick (`ADR-11.D3`).
 - Per-window frame membership and the data-before-seal ordering within each window are reconciled and reproducible.
 - `WindowClosedConsumer` collapses the per-shard seals into exactly one `WindowClosed` event per window, so the **set and count of closed windows are fixed** for a given replay — never a function of transport timing.
 
@@ -206,7 +206,7 @@ one storage for every shard; `Config::reserved_frames` reserves it once at a cou
 
 **Key features:**
 - Threadless pull pipeline: `ShmTransportDrainer` -> `CausalReorderBuffer` -> `FrameEmitter`
-- Deterministic byte-identical replay via `CausalKey = (logical_tick, agent_order, intra_agent_index, shard_id)`
+- Deterministic byte-identical replay via `CausalKey = (logical_tick, frame_class, agent_order, intra_agent_index, shard_id)`
 - Zero-copy: frame payload is a view into the consumer's internal buffer, valid until the next `try_next()`
 - Shard-aware: handles multi-shard producers with frontier gating until every shard has produced or EOS'd
 - EOS is absorbed internally; `all_shards_done()` flips true once every shard has EOS'd and the reorder storage is empty
@@ -214,8 +214,9 @@ one storage for every shard; `Config::reserved_frames` reserves it once at a cou
 `header.sequence` remains a transport sequence, not a deterministic
 simulation order, and is used internally only for gap detection on a single
 shard. Deterministic cross-run replay relies on the logical merge key
-`(logical_tick, agent_order, intra_agent_index, shard_id)` carried in every
-frame header.
+`(logical_tick, frame_class, agent_order, intra_agent_index, shard_id)`, every
+member read off the frame header: `frame_class` is the `WindowSeal` flag, not a
+field of its own.
 
 ### Producer Package: Frame Builder
 
@@ -385,11 +386,16 @@ ABI version constants ensure compatibility:
   owner record)
 
 `sequence` and `shard_sequence` are transport metadata. Deterministic consumers
-should reconstruct canonical order with `(logical_tick, agent_order,
-intra_agent_index, shard_id)`. The trailing `shard_id` is a tie-break for the
-otherwise unlikely case where two shards emit frames with identical
-`(logical_tick, agent_order, intra_agent_index)` — without it, the k-way merge
-would visit those frames in arrival order, which is non-deterministic.
+should reconstruct canonical order with `(logical_tick, frame_class,
+agent_order, intra_agent_index, shard_id)`. `frame_class` is seal before data,
+read from the `WindowSeal` flag: seal(K) is emitted at window K+1's first
+instant, so a data frame stamped there — agent 0's first record on a boundary
+carries a seal's `(logical_tick, 0, 0)` — belongs to window K+1 and follows
+every shard's seal(K). The trailing `shard_id` is a tie-break every window
+reaches: each shard's seal for one window carries the same
+`(logical_tick, frame_class, agent_order, intra_agent_index)` — without it, the
+k-way merge would visit those seals in arrival order, which is
+non-deterministic.
 
 `WindowSeal` is the completion barrier, and it is the only one on the wire: end
 of stream is the channel's STATE (Closing, Closed or Aborted), read by the

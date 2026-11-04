@@ -119,6 +119,9 @@ static_assert(std::has_unique_object_representations_v<LineFrameHeader>,
               "members tile the struct exactly (an IPC header is memcpy'd; padding bytes are "
               "indeterminate on the wire)");
 
+// refs: ADR-11.D3
+// invariant: flags is the LineFrameFlags set, because the causal key reads its seal/data class from
+// the WindowSeal bit and no second field carries that fact.
 template <typename F>
 concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) {
     { frame.header.sequence } -> std::convertible_to<std::uint64_t>;
@@ -127,7 +130,7 @@ concept FrameLike = std::is_trivially_copyable_v<F> && requires(const F& frame) 
     { frame.header.agent_order } -> std::convertible_to<std::uint32_t>;
     { frame.header.intra_agent_index } -> std::convertible_to<std::uint32_t>;
     { frame.header.shard_id } -> std::convertible_to<std::uint32_t>;
-    { frame.header.flags };
+    { frame.header.flags } -> std::convertible_to<LineFrameFlags>;
     { frame.header.payload_size } -> std::convertible_to<std::uint32_t>;
 };
 
