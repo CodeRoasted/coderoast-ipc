@@ -6,7 +6,7 @@ packages:
     release: true
     depends: []
     # DN-142.D25 (5) call D: the verdict `coderoast_ipc_core/bench`, measured by the cut's bench job on the release seat
-    # (`pharos candidates bench`, DN-142.D33) under `user.malf:bench`; each JSON is published under
+    # (`pharos candidates bench`, ADR-2.D14) under `user.malf:bench`; each JSON is published under
     # the name the hub collects.
     objects:
       bench/coderoast_ipc_core_bench.json: {published: {assets: [{name: coderoast-ipc-core-benchmark.json}]}}
@@ -38,7 +38,7 @@ packages:
 # Both gates — the clock (the determinism bible §7) and std <random> (§5 M7/M9) — judge every C/C++
 # unit under `roots:`, one subject and one root list; every build target above that no root reaches
 # is named under `out_of_scope:` with its reason. malf's coderoast-preflight.yml runs them over this
-# repository; the superproject sums the `opt_outs:` budgets across repositories (DN-142.D33).
+# repository; the superproject sums the `opt_outs:` budgets across repositories (ADR-2.D14).
 determinism:
   # The determinism bible §6 draws the line INSIDE this repository: the RAW pre-reconciliation
   # interleave is a DECLARED RACE these gates assert nothing about; what the causal merge reconstructs
