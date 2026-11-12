@@ -35,11 +35,11 @@ jobs:
     with:
       postflight: ${{ inputs.postflight }}
 
-  # Sift, integrated the way any user integrates it (the Founder, 2026-10-27): the published Action
+  # Tamys, integrated the way any user integrates it (the Founder, 2026-10-27): the published Action
   # from the marketplace, in a job of its own that diffs the build job's log (`target-job`) against
   # the last green run of this workflow. Advisory: `fail-on` stays `none`, and `always()` diffs a red
   # build too, which is when the diff matters.
-  sift:
+  tamys:
     needs: build
     if: ${{ always() }}
     runs-on: ubuntu-24.04
@@ -47,7 +47,7 @@ jobs:
       contents: read
       actions: read   # the build job's log and the baseline artifact
     steps:
-      - name: Sift — the build log against the last green run
+      - name: Tamys — the build log against the last green run
         uses: CodeRoasted/sift-action@02066069ff16d9b8ce2487b19a3686a3acdf24d7 # v2.0.0
         with:
           target-job: build
