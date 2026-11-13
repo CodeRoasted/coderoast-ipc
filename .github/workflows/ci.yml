@@ -48,6 +48,6 @@ jobs:
       actions: read   # the build job's log and the baseline artifact
     steps:
       - name: Tamys — the build log against the last green run
-        uses: CodeRoasted/sift-action@02066069ff16d9b8ce2487b19a3686a3acdf24d7 # v2.0.0
+        uses: CodeRoasted/tamys-action@02066069ff16d9b8ce2487b19a3686a3acdf24d7 # v2.0.0
         with:
           target-job: build
